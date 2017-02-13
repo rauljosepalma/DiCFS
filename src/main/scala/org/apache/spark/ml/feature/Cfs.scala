@@ -23,12 +23,11 @@ class CfsSubsetEvaluator(correlations: CorrelationsMatrix)
   override def evaluate(state: EvaluableState[BitSet]): 
     Double = {
 
-
     val subset: BitSet = state.evaluableData
 
-    if(cache.contains(subset)){
+    if(cache.contains(subset)) {
       cache(subset)
-    }else{
+    } else {
       numOfEvaluations += 1
       // We are applying a simplified version of the heuristic formula
       val iClass = correlations.nFeats - 1
@@ -39,17 +38,18 @@ class CfsSubsetEvaluator(correlations: CorrelationsMatrix)
 
       val denominator = sqrt(subset.size + 2.0 * interFeatCorrelations)
 
-      // TODO Check if this is really needed
-      // Take care of aproximations problems and return EvaluatedState
-      // if (denominator == 0.0) {
-      //   new EvaluatedState(state, Double.NegativeInfinity)
-      // } else if (numerator/denominator < 0.0) {
-      //   new EvaluatedState(state, -numerator/denominator)
-      // } else {
-      //   new EvaluatedState(state, numerator/denominator)
-      // }
+      // Take care of aproximations problems
+      val merit = 
+        if (denominator == 0.0) {
+          0.0
+        } else {
+          if (numerator/denominator < 0.0) {
+            -numerator/denominator
+          } else {
+            numerator/denominator
+          }
+        }
       
-      val merit = numerator/denominator
       cache(subset) = merit
       
       merit
@@ -125,7 +125,7 @@ class CfsFeatureSelector(data: RDD[LabeledPoint]) {
       new BestFirstSearcher(
         initialState = new FeaturesSubset(BitSet(), nFeats),
         evaluator = subsetEvaluator,
-        maxFails = 4)
+        maxFails = 5)
     }
 
     val result: EvaluableState[BitSet] = optimizer.search

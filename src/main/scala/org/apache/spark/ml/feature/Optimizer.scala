@@ -28,5 +28,7 @@ class EvaluatedState[T](val state: EvaluableState[T], val merit: Double)
     else -1
   }
 
-  override def toString(): String = state.evaluableData.toString
+  override def toString(): String = { 
+    state.evaluableData.toString + " Merit: %.4f".format(merit)
+  }
 }
