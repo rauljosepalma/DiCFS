@@ -6,9 +6,9 @@ import scala.collection.mutable.ListBuffer
 class BestFirstSearcher[T](
   initialState: EvaluableState[T],
   evaluator: StateEvaluator[T],
-  maxFails: Int) extends Optimizer[T](evaluator) {
+  maxFails: Int) extends Optimizer[T] {
 
-  def search: EvaluableState[T] = {
+  def search: EvaluatedState[T] = {
     val evaluatedInitState = 
       new EvaluatedState[T](initialState, evaluator.evaluate(initialState))
 
@@ -21,7 +21,7 @@ class BestFirstSearcher[T](
   private def doSearch(
     priorityList: BestFirstSearchList[T],
     bestState: EvaluatedState[T],
-    nFails: Int): EvaluableState[T] = {
+    nFails: Int): EvaluatedState[T] = {
 
     // DEBUG
     // println("LIST: " + priorityList.toString)
@@ -30,15 +30,20 @@ class BestFirstSearcher[T](
     val head = priorityList.dequeue
     // A collection of evaluated search states
     // DEBUG
-    // println("REMOVING HEAD:" + head.toString)
+    // println("HEAD:" + head.toString)
     val newStates: IndexedSeq[EvaluatedState[T]] = 
-      head.state.expand.map(s => new EvaluatedState(s, evaluator.evaluate(s)))
+      (head
+        .state
+        .expand
+        .map(s => new EvaluatedState[T](s,evaluator.evaluate(s)))
+      )
+      
     // Interestlingly enough, the search on WEKA accepts repeated elements on
     // the list, so this behavior is copied here.
     priorityList ++= newStates
 
     if (priorityList.isEmpty) {
-      bestState.state
+      bestState
     } else {
       val bestNewState = priorityList.head
       if (bestNewState.merit - bestState.merit > 0.00001) {
@@ -50,7 +55,7 @@ class BestFirstSearcher[T](
 
         doSearch(priorityList, bestState, nFails + 1)
       } else {
-        bestState.state
+        bestState
       }
     }
   }

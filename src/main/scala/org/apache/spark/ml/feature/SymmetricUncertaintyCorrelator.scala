@@ -9,8 +9,9 @@ abstract class Correlator(val sameFeatureValue: Double) {
 }
 
 
-class SymmetricUncertaintyCorrelator(ctm: ContingencyTablesMatrix, nInstances: Long) 
-  extends Correlator(sameFeatureValue=1.0) {
+class SymmetricUncertaintyCorrelator(
+  ctm: ContingencyTablesMatrix, nInstances: Long) 
+  extends Correlator(sameFeatureValue=1.0) with Serializable {
 
   // Entropies are frequently needed by the method correlate,
   // so they are calculated and cached

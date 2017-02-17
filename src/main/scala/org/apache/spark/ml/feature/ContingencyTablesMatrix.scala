@@ -8,12 +8,12 @@ import scala.collection.mutable
 import scala.collection.immutable
 
 // nFeats parameter should include the class
-class ContingencyTablesMatrix(val nFeats: Int) extends java.io.Serializable {
+class ContingencyTablesMatrix(val nFeats: Int) extends Serializable {
 
   val featsIndexes: Vector[(Int,Int)] = 
     (0 until nFeats).combinations(2).toVector.map{ case Vector(i,j) => (i,j) }
 
-  // keys for both external and internal map must meet: first <= last
+  // keys for external map must meet: first <= last
   val tables:
     immutable.Map[(Int,Int), mutable.Map[(Int,Int), Int]] = {
     
@@ -31,11 +31,30 @@ class ContingencyTablesMatrix(val nFeats: Int) extends java.io.Serializable {
   
 }
 
-// An object is use for the construction no inside any other class to prevet 
-// the need of Serializing the whole class
+// An object is used for the construction outside from CfsFeatureSelector class
+// to prevent the need of Serializing the whole class
 object ContingencyTablesMatrix {
 
   def apply(data: RDD[LabeledPoint], nFeats: Int): ContingencyTablesMatrix = {
+
+    //DEBUG Read Matrix from disk
+    var ctmFound = false
+    var matrix: ContingencyTablesMatrix = null
+
+    try { 
+      val ois = 
+        new java.io.ObjectInputStream(new java.io.FileInputStream("./ctm"))
+      matrix = ois.readObject.asInstanceOf[ContingencyTablesMatrix]
+      ois.close
+      ctmFound = true
+    } catch {
+      case e: Exception => 
+        println("Couldn't find a serialized ContingencyTablesMatrix, calculating it...")
+
+    }
+    
+    if(ctmFound) ( return matrix )
+    // END DEBUG
 
     def accumulator (
       matrix: ContingencyTablesMatrix, lp: LabeledPoint): 
@@ -81,7 +100,16 @@ object ContingencyTablesMatrix {
     }
 
     // The hard work is done in the following line
-    data
-      .aggregate(new ContingencyTablesMatrix(nFeats))(accumulator, merger)
+    var tmpmatrix = 
+      data.aggregate(new ContingencyTablesMatrix(nFeats))(accumulator, merger)
+
+    // DEBUG save matrix to disk
+    val oos = 
+      new java.io.ObjectOutputStream(new java.io.FileOutputStream("./ctm"))
+    oos.writeObject(tmpmatrix)
+    oos.close
+    // END DEBUG
+
+    return tmpmatrix
   }
 }

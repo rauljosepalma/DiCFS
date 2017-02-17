@@ -4,18 +4,13 @@ import scala.math.round
 
 // Creates a correlations matrix for all features and class from dataset
 // nFeats parameter should include the class
-class CorrelationsMatrix(correlator: Correlator, val nFeats: Int) {
-
-  // Correlate each feature f with f + 1 until last
-  private var linearMatrix: IndexedSeq[Double] = 
-    (0 until nFeats).flatMap { iFeatA =>
-      (iFeatA + 1 until nFeats)
-        .map{ iFeatB => correlator.correlate(iFeatA, iFeatB) }
-    }
+class CorrelationsMatrix(
+  linearMatrix: IndexedSeq[Double], sameFeatureValue: Double, val nFeats: Int) 
+  extends Serializable {
 
   def apply(i:Int, j:Int): Double = {
     if(i == j) {
-      correlator.sameFeatureValue
+      sameFeatureValue
     // Only pairs (i,j) where i < j are stored
     } else if(i < j){
       // Calculate position on linear storage
@@ -30,6 +25,21 @@ class CorrelationsMatrix(correlator: Correlator, val nFeats: Int) {
       linearMatrix(position.toInt)
     }
   }
+}
+
+// Companion object created to prevent the serialization of the correlator
+// parameter that also contains the ContingencyTablesMatrix
+object CorrelationsMatrix {
+  def apply(correlator: Correlator, nFeats: Int): CorrelationsMatrix = {
+    
+    val linearMatrix: IndexedSeq[Double] = 
+      (0 until nFeats).flatMap { iFeatA =>
+        (iFeatA + 1 until nFeats)
+          .map{ iFeatB => correlator.correlate(iFeatA, iFeatB) }
+      }
+
+    new CorrelationsMatrix(linearMatrix, correlator.sameFeatureValue, nFeats)
+  } 
 }
 
 

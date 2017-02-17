@@ -117,6 +117,10 @@ class RandomPartitioner (
        partition
     }
   }
+
+  // DEBUG
+  // println("PARTITION ARRAY:")
+  // println(partition.mkString(","))
     
   /**
    * Assigns a new random partition to the individual based on its key 
@@ -126,7 +130,7 @@ class RandomPartitioner (
    * @return The id of the partition the individual was assigned to
    */
   override def getPartition(key: Any): Int = {
-     val k = key.asInstanceOf[Int]
+     val k = key.asInstanceOf[Long].toInt
      
 // **********  Uncomment only for debugging **********
 //     println("Key: " + k + " - Index: " + partition(k)) // for local mode only

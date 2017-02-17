@@ -515,8 +515,6 @@ object Main {
     }
 
     // ReliefF Model
-    // args(0) Dataset full location
-    // args(1) Search type: BestFirst or GASearch
 
     // Gets the datasets basename
     // val baseName = args(0).split('_').head.split('/').last
@@ -524,6 +522,9 @@ object Main {
     // val basePath = args(1) + "/" + baseName + "_k" + args(2) + "m" + args(3) + "ramp" + args(5)
 
     // CFS Feature Selection
+    // args(0) Dataset full location
+    // args(1) Use GA = true, Use BestFirst = false
+    // args(2) Add locally predictive feats
 
     // Transform DataFrame to RDD[LabeledPoint]
     val data: RDD[LabeledPoint] = 
@@ -533,11 +534,12 @@ object Main {
       }
     val featureSelector = new CfsFeatureSelector(data)
     val feats: BitSet = 
-    if(args(1).toUpperCase == "BESTFIRST") {
-      featureSelector.searchFeaturesSubset(false, false)
-    } else {
-      featureSelector.searchFeaturesSubset(true, true)
-    }
+      featureSelector.searchFeaturesSubset(
+        args(1).stripPrefix("useLocallyPred=").toBoolean,
+        args(2).stripPrefix("useGA=").toBoolean,
+        args(3).stripPrefix("usePopGTEnFeats=").toBoolean,
+        args(4).stripPrefix("optIslandPopulationSize=").toInt)
+
     println("SELECTED FEATS = " + feats.toString)
 
     // println("Weights:")

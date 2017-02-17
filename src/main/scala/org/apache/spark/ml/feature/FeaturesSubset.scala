@@ -7,12 +7,11 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.Partitioner
 import org.apache.spark.SparkContext
 
-// By extending Individual we also extend EvaluableState
 class FeaturesSubset(var feats: BitSet, val nFeats: Int) 
-  extends Individual[BitSet] {
+  extends EvaluableState[BitSet] {
 
-  def genotype: BitSet = feats
-  def genotype_= (g: BitSet) { feats = g }
+  def data: BitSet = feats
+  def data_= (d: BitSet) { feats = d }
 
   // Returns an indexed sequence of all possible new subsets with one more feat
   def expand: IndexedSeq[EvaluableState[BitSet]] = {
@@ -29,18 +28,18 @@ object FeaturesSubset {
   // would require sending a non-def parameter to the original constructor and
   // this is not permited. Also case classes don't allow apply method
   // overloading.
-  def apply(nFeats: Int) = new FeaturesSubset(randomGenotype(nFeats), nFeats)
+  def apply(nFeats: Int) = new FeaturesSubset(randomFeats(nFeats), nFeats)
   def apply(feats: BitSet, nFeats: Int)  = new FeaturesSubset(feats, nFeats)
 
   // Generates a random FeaturesSubset
-  private def randomGenotype(maxSize: Int): BitSet = {
-    require(maxSize > 1, "Individual's maxSize must be > 1")
+  private def randomFeats(nFeats: Int): BitSet = {
+    require(nFeats > 1, "FeaturesSubset's nFeats must be > 1")
     
-    val setSize = Random.nextInt(maxSize) + 1
+    val setSize = Random.nextInt(nFeats) + 1
 
     def randomBitSet(set: BitSet): BitSet = {
       if(set.size < setSize) {
-        randomBitSet(set + (Random.nextInt(maxSize) + 1))
+        randomBitSet(set + Random.nextInt(nFeats))
       } else {
         set
       }
@@ -51,30 +50,75 @@ object FeaturesSubset {
 }
 
 class FeaturesSubsetPopulationGenerator(
-  islandPopulationSize: Int, nIslands: Int, partitioner: Partitioner, 
-  val nFeats: Int, sc:SparkContext)
+  islandPopulationSize: Int, nIslands: Int, 
+  evaluator: StateEvaluator[BitSet], partitioner: Partitioner,
+  val nFeats: Int)
   extends PopulationGenerator[BitSet](
-    islandPopulationSize, nIslands, partitioner) {
-  
-  def generate: RDD[Individual[BitSet]] = {
+    islandPopulationSize, nIslands, evaluator, partitioner) {
+
+  // Generates a single size element for each feature (randomly repeats if
+  // necesary)
+  def generate: RDD[EvaluatedState[BitSet]] = {
+    require(islandPopulationSize * nIslands >= nFeats, 
+      "Total population size: %d must be >= than the number of feats".format(islandPopulationSize * nIslands))
 
     val indexedPopulation = 
-      sc.range(0, populationSize).map(i => (i, FeaturesSubset(nFeats))).partitionBy(partitioner)
+      (SparkContext.getOrCreate.range(0, populationSize)
+        .map{ i => 
+          val fs = 
+            if (i < nFeats)
+              FeaturesSubset(BitSet(i.toInt), nFeats)
+            else
+              FeaturesSubset(BitSet(Random.nextInt(nFeats)), nFeats)
 
+          (i, new EvaluatedState[BitSet](fs, evaluator.evaluate(fs)))
+        }
+        .partitionBy(partitioner)
+      )
     // Drop indexes (they're only needed for partitioning)
     indexedPopulation.map(_._2)
   }
+
+  // Generates random single elements FeaturesSubsets
+  // def generate: RDD[EvaluatedState[BitSet]] = {
+
+  //   val indexedPopulation = 
+  //     (SparkContext.getOrCreate.range(0, populationSize)
+  //       .map{ i => 
+  //         val fs = FeaturesSubset(BitSet(Random.nextInt(nFeats)), nFeats)
+  //         (i, new EvaluatedState[BitSet](fs, evaluator.evaluate(fs)))
+  //       }
+  //       .partitionBy(partitioner)
+  //     )
+  //   // Drop indexes (they're only needed for partitioning)
+  //   indexedPopulation.map(_._2)
+  // }
+
+  // Generates random elements and random size FeaturesSubsets
+  // def generate: RDD[EvaluatedState[BitSet]] = {
+
+  //   val indexedPopulation = 
+  //     (SparkContext.getOrCreate.range(0, populationSize)
+  //       .map{ i => 
+  //         val fs = FeaturesSubset(nFeats)
+  //         (i, new EvaluatedState[BitSet](fs, evaluator.evaluate(fs)))
+  //       }
+  //       .partitionBy(partitioner)
+  //     )
+  //   // Drop indexes (they're only needed for partitioning)
+  //   indexedPopulation.map(_._2)
+  // }
 }
 
 class FeaturesSubsetMutator(var mutationProbability: Float = 0.0F) 
   extends Mutator[BitSet] {
 
-  def mutate(ind: Individual[BitSet]): Individual[BitSet] = {
+  def mutate(state: EvaluableState[BitSet]): EvaluableState[BitSet] = {
 
-    // Copy the original Individual
+    // Copy the original EvaluableState
     val fs = new FeaturesSubset(
-      BitSet.fromBitMaskNoCopy(ind.genotype.toBitMask), 
-      ind.asInstanceOf[FeaturesSubset].nFeats)
+      BitSet.fromBitMaskNoCopy(state.data.toBitMask), 
+      state.asInstanceOf[FeaturesSubset].nFeats)
 
     if (mutationProbability == 0.0F) {
       mutationProbability = 1.0F/fs.nFeats
@@ -82,11 +126,14 @@ class FeaturesSubsetMutator(var mutationProbability: Float = 0.0F)
     for(i <- 0 until fs.nFeats) {
       if(mutationProbability >= Random.nextFloat){
         // TODO test if the are improvements using a mutable BitSet!
-        fs.genotype = 
-          if(fs.genotype.contains(i))
-            fs.genotype - i
-          else
-            fs.genotype + i
+        fs.feats = 
+          if(fs.feats.contains(i)) {
+            fs.feats - i
+            // TODO this would prevent empty FeaturesSubset's
+            // if (fs.feats.size > 1) (fs.feats - i) else fs.feats
+          } else {
+            fs.feats + i
+          }
       }
     }
 
@@ -96,37 +143,35 @@ class FeaturesSubsetMutator(var mutationProbability: Float = 0.0F)
 
 class UniformFeaturesSubsetMatchmaker(var swapProbability: Float = 0.0F) extends Matchmaker[BitSet] {
 
-  def crossover(indA: Individual[BitSet], indB: Individual[BitSet]): 
-    (Individual[BitSet], Individual[BitSet]) = {
+  def crossover(
+    stateA: EvaluableState[BitSet],
+    stateB: EvaluableState[BitSet]): 
+    (EvaluableState[BitSet], EvaluableState[BitSet]) = {
 
-    // Copy original Individuals    
+    // Copy original States    
     val fsA = new FeaturesSubset(
-      BitSet.fromBitMaskNoCopy(indA.genotype.toBitMask), 
-      indA.asInstanceOf[FeaturesSubset].nFeats)
+      BitSet.fromBitMaskNoCopy(stateA.data.toBitMask), 
+      stateA.asInstanceOf[FeaturesSubset].nFeats)
     val fsB = new FeaturesSubset(
-      BitSet.fromBitMaskNoCopy(indB.genotype.toBitMask), 
-      indB.asInstanceOf[FeaturesSubset].nFeats)
+      BitSet.fromBitMaskNoCopy(stateB.data.toBitMask), 
+      stateB.asInstanceOf[FeaturesSubset].nFeats)
 
     if (swapProbability == 0.0F) {
       swapProbability = 1.0F/fsA.nFeats
     }
     for(i <- 0 until fsA.nFeats) {
       if(swapProbability >= Random.nextFloat){
-        val isInFsA = fsA.genotype.contains(i)
-        val isInFsB = fsB.genotype.contains(i)
+        val isInFsA = fsA.feats.contains(i)
+        val isInFsB = fsB.feats.contains(i)
         if (isInFsA && !isInFsB) {
-          println("Making swap!")
-          fsA.genotype = fsA.genotype - i
-          fsB.genotype = fsB.genotype + i
+          fsA.feats = fsA.feats - i
+          fsB.feats = fsB.feats + i
         } else if (isInFsB && !isInFsA){
-          fsB.genotype = fsB.genotype - i
-          fsA.genotype = fsA.genotype + i
+          fsB.feats = fsB.feats - i
+          fsA.feats = fsA.feats + i
         }
       }
     }
-
-    println(fsA.genotype)
-    println(fsB.genotype)
 
     (fsA, fsB)
   }
