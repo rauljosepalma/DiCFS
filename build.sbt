@@ -2,12 +2,19 @@ name := "spark-cfs"
 
 version := "0.1.0-SNAPSHOT"
 
-scalaVersion := "2.10.5"
+scalaVersion := "2.11.8"
 
+scalacOptions := Seq("-unchecked", "-deprecation")
+
+val sparkVersion = "2.1.0"
+
+// Observe that for sramirez package %% is not used to prevent sbt adding
+// the scalaVersion after the artifactId. As mentioned in:
+// http://stackoverflow.com/questions/36080519/spark-shell-dependencies-translate-from-sbt
 libraryDependencies ++= Seq(
-  "org.apache.spark" %% "spark-core" % "1.6.0" % "provided",
-  "org.apache.spark" %% "spark-mllib" % "1.6.0" % "provided")
+  "org.apache.spark" %% "spark-core" % sparkVersion % "provided",
+  "org.apache.spark" %% "spark-mllib" % sparkVersion % "provided")
+  // "sramirez" % "spark-MDLP-discretization" % "1.2.1")
 
-// sparkVersion := "1.6.0"
 
 // sparkComponents += "mllib"

@@ -11,7 +11,7 @@ abstract class PopulationGenerator[T](
   val evaluator: StateEvaluator[T], val partitioner: Partitioner) extends Serializable {
 
   require(islandPopulationSize * nIslands < Int.MaxValue,
-    s"Total population size must be less than Int.MaxValue, since partitioners work with integer keys")
+    "Total population size must be less than Int.MaxValue, since partitioners work with integer keys")
 
   require(islandPopulationSize % 2 == 0, 
     "Island population must be an even number")
@@ -38,7 +38,10 @@ class GAOptimizer[T](
   maxGenerations: Int,
   maxTimeHours: Double,
   minMerit: Double,
+  eliteSize: Int,
   tournamentSize: Int) extends Optimizer[T] {
+
+  require(eliteSize % 2 == 0, "Elite size must be an even number")
 
   var population: RDD[EvaluatedState[T]] = populationGenerator.generate
   var nGenerations: Int = 0
@@ -126,7 +129,7 @@ class GAOptimizer[T](
     def localEvolve(localPopulation:Iterator[EvaluatedState[T]]): 
       Iterator[EvaluatedState[T]] = {
 
-      val indexedLocalPopulation = localPopulation.toIndexedSeq
+      val indexedLocalPopulation = localPopulation.toIndexedSeq.sorted
       
       def tournamentSelection = {
         val tournamentMembers: IndexedSeq[EvaluatedState[T]] = 
@@ -138,8 +141,12 @@ class GAOptimizer[T](
         tournamentMembers.max
       }
 
+      val elite: IndexedSeq[EvaluatedState[T]] = 
+        indexedLocalPopulation.slice(
+          islandPopulationSize - eliteSize, islandPopulationSize)
+
       val parents: IndexedSeq[(EvaluableState[T],EvaluableState[T])] = 
-        ((1 to islandPopulationSize / 2)
+        ((1 to (islandPopulationSize - eliteSize) / 2)
           .map( _ => (tournamentSelection.state, tournamentSelection.state) )
         )
 
@@ -149,9 +156,10 @@ class GAOptimizer[T](
           .flatMap{ case (i,j) => IndexedSeq(i, j) }
         )
 
-      children.map{ ch =>
-          new EvaluatedState(mutator.mutate(ch), evaluator.evaluate(ch)) 
-        }.toIterator
+      (elite ++ children.map{ ch =>
+        val mutated = mutator.mutate(ch)
+        new EvaluatedState(mutated, evaluator.evaluate(mutated)) 
+      }).toIterator
     }
 
     population = 

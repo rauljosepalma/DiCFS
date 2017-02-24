@@ -16,21 +16,25 @@ abstract class StateEvaluator[T] extends Serializable {
 abstract class EvaluableState[T] extends Serializable {
   def data: T
   def data_= (d: T)
+  def size: Int
   def expand: IndexedSeq[EvaluableState[T]]
 
   override def toString(): String = data.toString
 }
 
 // Represents a state and its merit
-class EvaluatedState[T](val state: EvaluableState[T], val merit: Double) 
+class EvaluatedState[T](val state: EvaluableState[T], val merit: Double)
+
   extends Ordered[EvaluatedState[T]] with Serializable {
 
   def compare(that: EvaluatedState[T]) = {
-    if(this.merit - that.merit > 0.0) 1 
-    else if (this.merit == that.merit) 0
-    else -1
+    val compareMerits = this.merit.compare(that.merit)
+    if(compareMerits == 0)
+      this.state.size.compare(that.state.size) 
+    else
+      compareMerits
   }
 
   override def toString(): String = 
-    state.toString + " Merit: %.4f".format(merit)
+    state.toString + " Merit: %.10f".format(merit)
 }

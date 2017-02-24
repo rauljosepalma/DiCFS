@@ -1,7 +1,6 @@
 package org.apache.spark.ml.feature
 
 import org.apache.spark.rdd.RDD
-import org.apache.spark.mllib.regression.LabeledPoint
 
 
 import scala.collection.mutable

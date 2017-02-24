@@ -2,7 +2,6 @@ package org.apache.spark.ml.feature
 
 import org.apache.spark.SparkException
 import org.apache.spark.rdd.RDD
-import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.broadcast.Broadcast
 
 import scala.collection.immutable.BitSet
@@ -123,20 +122,26 @@ class CfsFeatureSelector(data: RDD[LabeledPoint]) {
 
     val optimizer = if(useGAOptimizer) {
 
-      // DEBUG
-      println("Using a GA Optimizer")
 
       val nIslands = data.context.defaultParallelism
 
-      // DEBUG
-      println(s"nIslands = $nIslands")
-
       val islandPopulationSize: Int = 
         if(usePopGTEnFeats) {
-          if ((2*nFeats/nIslands) % 2 != 0) 
-            (2*nFeats/nIslands) + 1
-          else (2*nFeats/nIslands)
+          if ((nFeats/nIslands) % 2 != 0) 
+            (nFeats/nIslands) + 1
+          else (nFeats/nIslands)
         } else optIslandPopulationSize
+
+      val eliteSize: Int = {
+        val temp = (islandPopulationSize*0.10).toInt
+        if (temp % 2 == 0) temp else temp + 1
+      }
+
+      // DEBUG
+      println("Using a GA Optimizer")
+      println(s"nIslands = $nIslands")
+      println(s"islandPopulationSize = $islandPopulationSize")
+      println(s"eliteSize = $eliteSize")
 
       new GAOptimizer[BitSet](
         mutator = new FeaturesSubsetMutator,
@@ -153,9 +158,10 @@ class CfsFeatureSelector(data: RDD[LabeledPoint]) {
               ),
             nFeats = nFeats)
           ),
-        maxGenerations = 10,
+        maxGenerations = 30,
         maxTimeHours = 0.25,
         minMerit = Double.PositiveInfinity,
+        eliteSize =  eliteSize,
         tournamentSize = 2
       )
   

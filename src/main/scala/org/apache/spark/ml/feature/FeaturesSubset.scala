@@ -12,6 +12,7 @@ class FeaturesSubset(var feats: BitSet, val nFeats: Int)
 
   def data: BitSet = feats
   def data_= (d: BitSet) { feats = d }
+  def size: Int = feats.size
 
   // Returns an indexed sequence of all possible new subsets with one more feat
   def expand: IndexedSeq[EvaluableState[BitSet]] = {
