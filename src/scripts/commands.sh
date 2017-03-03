@@ -3,9 +3,10 @@
 
 # Local
 
-spark-submit --master local[*] --class org.apache.spark.ml.feature.Main /home/raul/Desktop/SparkCFS/project-files/target/scala-2.10/spark-cfs_2.10-0.1.0-SNAPSHOT.jar  "/home/raul/Datasets/Medium/covtype-discrete.arff" useLocallyPred=false useGA=true usePopGTEnFeats=true optIslandPopulationSize=30 &> /home/raul/Desktop/SparkCFS/project-files/src/test/spark.log
+spark-submit --master local[*] --class org.apache.spark.ml.feature.Main /home/raul/Desktop/SparkCFS/project-files/target/scala-2.11/spark-cfs_2.11-0.1.0-SNAPSHOT.jar  "/home/raul/Datasets/Medium/covtype-discrete.arff" useLocallyPred=false useGA=true usePopGTEnFeats=true optIslandPopulationSize=30 &> /home/raul/Desktop/SparkCFS/project-files/src/test/spark.log
 
 spark-submit --master local[*] --class org.apache.spark.ml.feature.Main --packages sramirez:spark-MDLP-discretization:1.2.1 /home/raul/Desktop/SparkCFS/project-files/target/scala-2.10/spark-cfs_2.10-0.1.0-SNAPSHOT.jar  "/home/raul/Datasets/Large/ECBDL14/head1000_train.parquet" &> /home/raul/Desktop/SparkCFS/project-files/src/test/spark.log
+
 
 # Change cores
 spark-submit --master local --class sparkfs.Main --total-executor-cores 3 /home/raul/Desktop/Spark-FS/project-files/target/scala-2.10/sparkfs_2.10-0.1.0.jar "/home/raul/Datasets/Large/EPSILON/EPSILON.parquet" "/home/raul/Desktop/Spark-FS/project-files/papers/DReliefF/results/EPSILON" 10 $i false
@@ -19,10 +20,10 @@ spark-shell --packages "spark-relieff:spark-relieff_2.10:0.1.0-SNAPSHOT"
 # Cluster
 /opt/spark/bin/spark-submit --class org.apache.spark.ml.feature.Main /root/relieff.jar hdfs://master:8020/datasets/ECBDL14_${i}percFeats.parquet /root/results/
 
-/opt/spark/bin/spark-submit --class org.apache.spark.ml.feature.Main --packages sramirez:spark-MDLP-discretization:1.2.1 /root/MLDPdiscretizer.jar  hdfs://master:8020/datasets/ECBDL14_{0}percFeats.parquet
+/opt/spark/bin/spark-submit --class org.apache.spark.ml.feature.Main --packages sramirez:spark-MDLP-discretization:1.2.1 /root/QuantileDiscretizer.jar  hdfs://master:8020/datasets/ECBDL14_{0}percFeats.parquet
 
 # Update .jar
-scp /home/raul/Desktop/SparkCFS/project-files/target/scala-2.10/spark-cfs_2.10-0.1.0-SNAPSHOT.jar root@master:/root/cfs.jar
+scp /home/raul/Desktop/SparkCFS/project-files/target/scala-2.11/spark-cfs_2.11-0.1.0-SNAPSHOT.jar root@master:/root/cfs.jar
 # Update cluster-todo.sh
 scp /home/raul/Desktop/SparkCFS/project-files/src/scripts/cluster-todo.sh root@master:/root/cluster-todo.sh
 
@@ -31,7 +32,10 @@ scp root@master:/root/results/ECBDL14/** "/home/raul/Desktop/PhD/Papers/2016 06 
 scp root@master:/root/nohup.out "/home/raul/Desktop/PhD/Papers/2017 - DiCFS/results/"
 
 # Execute work
+{ rm -f nohup.out ; nohup ./cluster-todo.sh & }
+rm -f nohup.out
 nohup ./cluster-todo.sh &
+
 { sleep 5h ; nohup ./cluster-todo-next.sh ; } &
 
 
@@ -67,27 +71,29 @@ export CLASSPATH=/home/raul/software/weka-3-8-0/weka.jar
 
 
 ## HADOOP & HDFS ##
+#=================#
 
 # Start missing datanode:
 sh /opt/hadoop/sbin/hadoop-daemon.sh start datanode
 
 # Start missing slave:
 # id should be int bigger than the 
-ssh /opt/spark/sbin/start-slave.sh spark://master:7077
+sh /opt/spark/sbin/start-slave.sh spark://master:7077
 
 # HDFS Commands
 # View dataset sizes:
 hdfs dfs -du -h /datasets/
 # Remover dir
 hdfs dfs -rm -r /datasets/EPSILON.parquet
+# Upload from local (master)
+bicho$ service smb restart
+bicho$ service nmb restart
+master$ mount /mnt/shared
+master$ hdfs dfs -put /mnt/shared/datasets/data.arff /datasets/
 
 # Decomissioning nodes
 # Add node to hadoop/etc/hadoop/dfs.exclude
 hdfs dfsadmin -refreshNodes
 # Once decomissioned has ended:
-echo "ssh hdfs@slave$j /opt/hadoop/sbin/hadoop-daemon.sh stop datanode"
+ssh hdfs@slave{0} '( /opt/hadoop/sbin/hadoop-daemon.sh stop datanode )'
 # Remove them from slaves file
-
-
-# # WEKA
-sleep 1h

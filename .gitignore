@@ -19,3 +19,7 @@ project/plugins/project/
 # ENSIME specific
 .ensime_cache/
 .ensime
+
+# Sublime Text
+.sublime-project
+.sublime-workspace

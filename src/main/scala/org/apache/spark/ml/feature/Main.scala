@@ -15,7 +15,6 @@ import org.apache.spark.util.CollectionAccumulator
 
 // import org.apache.spark.mllib.feature.MDLPDiscretizer
 
-import scala.collection.Map
 import scala.collection.mutable
 import scala.collection.mutable.Buffer
 import scala.collection.immutable.IndexedSeq
@@ -90,8 +89,11 @@ object Main {
   // returns  DataFrame with two cols: features and label,
   // it also returns a HashSet with possible exceptions captured
   // during file parsing
-  def readArffToDF(fLocation: String): 
-    (DataFrame, Buffer[(String, Throwable)]) = {
+  def readDFFromArff(
+    fLocation: String, 
+    discretize: Boolean, 
+    nBinsPerColumn: Array[Int] = Array())
+    : (DataFrame, Buffer[(String, Throwable)]) = {
 
     val sc = SparkContext.getOrCreate
     val spark = SparkSession.builder().getOrCreate()
@@ -186,18 +188,50 @@ object Main {
     val dfSchema = StructType(fields)
 
     // Create DataFrame
-    val df = spark.createDataFrame(doublesRDD, dfSchema)  
+    val doublesDF = spark.createDataFrame(doublesRDD, dfSchema)
+    doublesDF.cache
+
+    val (df, inputCols) =
+      if(discretize) {      
+
+        def discretizeNominal(df: DataFrame, idx: Int): DataFrame = {
+          // Try to discretize everything except the label
+          if(idx < attrs.size - 1){
+            if(attrs(idx).isNumeric){
+              val name = attrs(idx).name.get
+              println("DISCRETIZING:" + name)
+              val discretizer = (new QuantileDiscretizer()
+                .setNumBuckets(nBinsPerColumn(idx))
+                .setInputCol(name)
+                .setOutputCol(name + "-discretized")
+              )
+              // Test if caching if needed here!
+              discretizeNominal(
+                discretizer.fit(df).transform(df).cache, idx + 1)
+            } else discretizeNominal(df, idx + 1)
+          } else df
+        }
+
+        val discretizedDF = discretizeNominal(doublesDF, 0)
+
+        val inputCols = 
+          attrs.map{ attr =>
+            if(attr.isNumeric)
+              attr.name.get + "-discretized"
+            else
+              attr.name.get
+          }.filter(_ != "label")
+
+        (discretizedDF, inputCols)
+      } else {
+        val inputCols = 
+          attrs.map(_.name.get).filter(_ != "label")
+        
+        (doublesDF, inputCols)
+      }
 
     // Merge features except class
     // This merge conserves the metadata
-    val inputCols = attrs.map{ attr =>
-      attr.name match {
-        case Some(name: String) => name
-        case None => 
-          throw new SparkException(
-                  s"Found nominal attribute with no name: $attr")
-      }
-    }.filter(_ != "label")
     val assembler = (new VectorAssembler()
       .setInputCols(inputCols)
       .setOutputCol("features")
@@ -243,64 +277,6 @@ object Main {
       df("features").as("features", featsAttrGroup.toMetadata),
       df("label").as("label", labelAttr.toMetadata))
   }
-
-  // Returns a new DataFrame with numeric features discretized
-  // Observe the following: 
-  //   - Binary feats are not supported.
-  //   - Features order is lost, nominal features will come first.
-  //   - Original numeric features' names will be lost.
-  //   - New nominal features will not contain metadata about their values.
-  def discretizeDF(data:DataFrame, 
-    featuresCol:String = "features", labelCol:String = "label"): DataFrame = {
-
-     // Extract attributes from metadata.
-    val ag = AttributeGroup.fromStructField(data.schema(featuresCol))
-    val attrs: Array[Attribute] = ag.attributes.get
-    val numericFeats: Array[Int] = (attrs
-        .filter(_.attrType == AttributeType.Numeric)
-        .map(_.index.get)
-      )
-    val nominalFeats: Array[Int] = (attrs
-        .filter(_.attrType == AttributeType.Nominal)
-        .map(_.index.get)
-      )
-
-    // Separate feats two new columns
-    val slicerNumeric = (new VectorSlicer()
-      .setInputCol(featuresCol)
-      .setOutputCol(featuresCol + "-numeric")
-      .setIndices(numericFeats))
-    val slicerNominal = (new VectorSlicer()
-      .setInputCol(featuresCol)
-      .setOutputCol(featuresCol + "-nominal")
-      .setIndices(nominalFeats))
-    
-    val dataSeparatedFeats: DataFrame = 
-      slicerNominal.transform(slicerNumeric.transform(data))
-    
-    val discretizer = (new MDLPDiscretizer()
-      .setMaxBins(20)
-      .setMaxByPart(1000)
-      .setInputCol(featuresCol + "-numeric")
-      .setLabelCol(labelCol)
-      .setOutputCol(featuresCol + "-discretized")
-    )
-
-    // Discretize numeric feats column and drop irrelevant cols
-    val dfDiscretized: DataFrame = (discretizer
-      .fit(dataSeparatedFeats).transform(dataSeparatedFeats)
-      .select(featuresCol+"-nominal", featuresCol+"-discretized", labelCol)
-    )
-
-    // merge discretized feats with nominal feats
-    val assembler = (new VectorAssembler()
-      .setInputCols(Array(featuresCol+"-nominal", featuresCol+"-discretized"))
-      .setOutputCol(featuresCol))
-
-    assembler.transform(dfDiscretized).select(featuresCol, labelCol)
-
-  }
-
 
   // Creates am AttributeGroup with NumericAttributes for the features column
   // and a NominalAttribute for the label column
@@ -358,46 +334,142 @@ object Main {
         // Reduce verbosity
     // sc.setLogLevel("WARN")
     
-    val df = args(0).split('.').last match {
-      case "arff" => 
-        val (df1, excepts) = readArffToDF(args(0))
-        // Print errors in case they happened
-        if (!excepts.isEmpty) {
-          println("Exceptions found during parsing:")
-          excepts.foreach(println)
-        }
-        // if(!excepts.isEmpty) {
+    // val df = args(0).split('.').last match {
+    //   case "arff" => 
+    //     val (df1, excepts) = readDFFromArff(args(0), discretize=false, nBinsPerColumn=Array(9,11,32,4,4,4,4,3,4,4,4,4,4,4,4,4,3,4,4,4,4,12,12,22,21,22,11,27,17,21,28,13,25,6,18,8,19,26,15,6,6,6,6,5,6,6,6,6,6,6,6,6,5,6,6,6,6,6,6,6,6,5,6,6,6,6,6,6,6,6,5,6,6,6,6,6,6,6,6,5,6,6,6,6,6,6,6,6,5,6,6,6,6,40,46,60,27,69,31,31,33,60,29,32,50,28,44,34,33,20,37,11,6,12,20,8,8,13,31,10,8,8,14,8,5,7,20,13,7,6,11,3,3,3,3,3,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,27,24,14,29,20,27,26,20,23,21,36,7,18,11,27,17,25,7,14,24,4,4,3,4,4,3,3,5,4,3,4,5,2,5,6,2,5,5,6,3,4,4,3,4,3,3,4,5,3,4,3,4,2,3,6,3,5,5,4,5,4,4,4,5,3,4,4,5,4,4,2,5,2,5,6,3,5,3,5,6,5,5,5,6,4,5,4,6,6,5,3,6,2,4,8,4,5,2,4,6,8,7,9,8,6,7,8,8,7,9,8,7,7,7,7,6,7,4,4,8,4,6,4,5,3,3,5,5,4,4,2,4,2,2,6,4,5,2,3,5,4,5,4,4,3,3,3,4,3,4,2,4,3,3,5,4,3,2,3,5,5,3,4,4,3,5,4,3,2,4,4,3,2,2,3,3,3,3,3,4,4,2,3,4,3,2,2,4,2,2,3,2,3,3,4,2,3,2,5,3,4,2,2,2,3,2,2,5,2,2,3,2,3,2,2,2,2,2,2,2,4,3,3,4,3,4,4,4,2,3,2,3,2,2,2,3,3,2,2,3,2,2,3,3,3,2,2,4,2,3,3,2,2,3,2,2,4,2,2,4,2,4,3,4,2,3,3,4,2,3,4,2,2,2,3,3,4,3,3,4,7,5,7,8,6,8,7,7,6,8,7,6,6,7,6,6,4,5,4,7,4,5,4,5,3,3,4,5,3,4,4,5,3,4,5,5,5,3,2,5,2,4,4,5,3,4,4,4,4,4,2,4,2,4,7,5,5,3,3,6,4,3,4,5,2,3,4,4,4,3,3,3,2,3,5,4,4,2,4,4,4,3,5,5,5,4,4,4,3,3,4,4,3,4,5,4,5,4,2,4,2,3,2,4,3,2,2,2,3,2,2,3,3,2,4,2,3,2,3,2,2,3,2,4,3,2,2,2,3,2,2,2,2,2,3,2,3,3,3,2,2,3,2,3,4,2,2,2,3,2,2,2,2,3,3,2,3,3,3,2,2,2,2,3,4,2,3,2,3,2,3,2,3,3,4,3,3,3,3,2,2,2,2,2,3,2,2,2,3,2,2,2,2,2,3,3,2,2,3,2))
+    //     // Print errors in case they happened
+    //     if (!excepts.isEmpty) {
+    //       println("Exceptions found during parsing:")
+    //       excepts.foreach(println)
+    //     }
+    //     // if(!excepts.isEmpty) {
 
-        //   outputInfoLine("ERROR: PARSING EXCEPTIONS WHERE CATCHED:")
+    //     //   outputInfoLine("ERROR: PARSING EXCEPTIONS WHERE CATCHED:")
 
-        //   excepts.foreach{ case (line, except) =>
-        //     val message = except.getMessage()
-        //     outputInfoLine(s"Line = $line")
-        //     outputInfoLine(s"Exception = $message")
-        //   }
-        // }
-        df1
-      case "libsvm" => 
-        readSVMToDF(args(0), args(2).toInt, Array(args(3), args(4)))
-      case "parquet" =>
-        spark.read.parquet(args(0))
-    }
+    //     //   excepts.foreach{ case (line, except) =>
+    //     //     val message = except.getMessage()
+    //     //     outputInfoLine(s"Line = $line")
+    //     //     outputInfoLine(s"Exception = $message")
+    //     //   }
+    //     // }
+    //     df1
+    //   case "libsvm" => 
+    //     readSVMToDF(args(0), args(2).toInt, Array(args(3), args(4)))
+    //   case "parquet" =>
+    //     spark.read.parquet(args(0))
+    // }
 
-    // CFS Model
+    // // CFS Model
 
-    // Gets the datasets basename
-    // val baseName = args(0).split('_').head.split('/').last
-    // // Ex.: /root/ECBDL14_k10m40_feats_weights.txt
-    // val basePath = args(1) + "/" + baseName + "_k" + args(2) + "m" + args(3) + "ramp" + args(5)
+    // // Gets the datasets basename
+    // // val baseName = args(0).split('_').head.split('/').last
+    // // // Ex.: /root/ECBDL14_k10m40_feats_weights.txt
+    // // val basePath = args(1) + "/" + baseName + "_k" + args(2) + "m" + args(3) + "ramp" + args(5)
 
-    // CFS Feature Selection
-    // args(0) Dataset full location
+    // // CFS Feature Selection
+    // // args(0) Dataset full location
+    // // val attrs
 
-    // Discretize & save dataset
-    df.cache
-    // println("Doing nothing right now!")
-    val discreteDF = discretizeDF(df)
-    df.write.format("parquet").save(args(0).split('.').head + "-discrete-no_meta.parquet")
+
+    // // df.select(attrs)
+
+    // def discretizeDF(df: DataFrame, nColumns: Int, nBinsPerColumn: Int)
+    //   : DataFrame = {
+
+    //   def discretizeNominal(idx: Int): DataFrame = {
+    //     // Try to discretize everything except the label
+    //     if(idx < nColumns - 1){
+    //       if(attrs(idx).isNumeric){
+    //         val name = attrs(idx).name.get
+    //         val discretizer = (new QuantileDiscretizer()
+    //           .setNumBuckets(nBinsPerColumn(idx))
+    //           .setInputCol(name)
+    //           .setOutputCol(name + "-discretized")
+    //         )
+    //         // Test if caching if needed here!
+    //         discretizeNominal(
+    //           discretizer.fit(df).transform(df).cache, idx + 1)
+    //       } else discretizeNominal(df, idx + 1)
+    //     } else df
+    //   }
+
+    //   discretizeNominal(0)
+    // }
+
+    // val reducedDf = df.select(attrsNames(0), attrsNames.slice(1,316):_*).persist(org.apache.spark.storage.StorageLevel.MEMORY_ONLY)
+
+    // df.write.format("parquet").save(args(0).split('.').head + ".parquet")
+
+
+
+val nBinsPerColumn=Array(9,11,32,4,4,4,4,3,4,4,4,4,4,4,4,4,3,4,4,4,4,12,12,22,21,22,11,27,17,21,28,13,25,6,18,8,19,26,15,6,6,6,6,5,6,6,6,6,6,6,6,6,5,6,6,6,6,6,6,6,6,5,6,6,6,6,6,6,6,6,5,6,6,6,6,6,6,6,6,5,6,6,6,6,6,6,6,6,5,6,6,6,6,40,46,60,27,69,31,31,33,60,29,32,50,28,44,34,33,20,37,11,6,12,20,8,8,13,31,10,8,8,14,8,5,7,20,13,7,6,11,3,3,3,3,3,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,27,24,14,29,20,27,26,20,23,21,36,7,18,11,27,17,25,7,14,24,4,4,3,4,4,3,3,5,4,3,4,5,2,5,6,2,5,5,6,3,4,4,3,4,3,3,4,5,3,4,3,4,2,3,6,3,5,5,4,5,4,4,4,5,3,4,4,5,4,4,2,5,2,5,6,3,5,3,5,6,5,5,5,6,4,5,4,6,6,5,3,6,2,4,8,4,5,2,4,6,8,7,9,8,6,7,8,8,7,9,8,7,7,7,7,6,7,4,4,8,4,6,4,5,3,3,5,5,4,4,2,4,2,2,6,4,5,2,3,5,4,5,4,4,3,3,3,4,3,4,2,4,3,3,5,4,3,2,3,5,5,3,4,4,3,5,4,3,2,4,4,3,2,2,3,3,3,3,3,4,4,2,3,4,3,2,2,4,2,2,3,2,3,3,4,2,3,2,5,3,4,2,2,2,3,2,2,5,2,2,3,2,3,2,2,2,2,2,2,2,4,3,3,4,3,4,4,4,2,3,2,3,2,2,2,3,3,2,2,3,2,2,3,3,3,2,2,4,2,3,3,2,2,3,2,2,4,2,2,4,2,4,3,4,2,3,3,4,2,3,4,2,2,2,3,3,4,3,3,4,7,5,7,8,6,8,7,7,6,8,7,6,6,7,6,6,4,5,4,7,4,5,4,5,3,3,4,5,3,4,4,5,3,4,5,5,5,3,2,5,2,4,4,5,3,4,4,4,4,4,2,4,2,4,7,5,5,3,3,6,4,3,4,5,2,3,4,4,4,3,3,3,2,3,5,4,4,2,4,4,4,3,5,5,5,4,4,4,3,3,4,4,3,4,5,4,5,4,2,4,2,3,2,4,3,2,2,2,3,2,2,3,3,2,4,2,3,2,3,2,2,3,2,4,3,2,2,2,3,2,2,2,2,2,3,2,3,3,3,2,2,3,2,3,4,2,2,2,3,2,2,2,2,3,3,2,3,3,3,2,2,2,2,3,4,2,3,2,3,2,3,2,3,3,4,3,3,3,3,2,2,2,2,2,3,2,2,2,3,2,2,2,2,2,3,3,2,2,3,2)
+
+val attrsTypes = Array(true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true)
+
+val attrsNames=Array("separation","propensity","length","PredSS_r1_-4","PredSS_r1_-3","PredSS_r1_-2","PredSS_r1_-1","PredSS_r1","PredSS_r1_1","PredSS_r1_2","PredSS_r1_3","PredSS_r1_4","PredSS_r2_-4","PredSS_r2_-3","PredSS_r2_-2","PredSS_r2_-1","PredSS_r2","PredSS_r2_1","PredSS_r2_2","PredSS_r2_3","PredSS_r2_4","PredSS_freq_central_H","PredSS_freq_central_E","PredSS_freq_central_C","PredCN_freq_central_0","PredCN_freq_central_1","PredCN_freq_central_2","PredCN_freq_central_3","PredCN_freq_central_4","PredRCH_freq_central_0","PredRCH_freq_central_1","PredRCH_freq_central_2","PredRCH_freq_central_3","PredRCH_freq_central_4","PredSA_freq_central_0","PredSA_freq_central_1","PredSA_freq_central_2","PredSA_freq_central_3","PredSA_freq_central_4","PredRCH_r1_-4","PredRCH_r1_-3","PredRCH_r1_-2","PredRCH_r1_-1","PredRCH_r1","PredRCH_r1_1","PredRCH_r1_2","PredRCH_r1_3","PredRCH_r1_4","PredRCH_r2_-4","PredRCH_r2_-3","PredRCH_r2_-2","PredRCH_r2_-1","PredRCH_r2","PredRCH_r2_1","PredRCH_r2_2","PredRCH_r2_3","PredRCH_r2_4","PredCN_r1_-4","PredCN_r1_-3","PredCN_r1_-2","PredCN_r1_-1","PredCN_r1","PredCN_r1_1","PredCN_r1_2","PredCN_r1_3","PredCN_r1_4","PredCN_r2_-4","PredCN_r2_-3","PredCN_r2_-2","PredCN_r2_-1","PredCN_r2","PredCN_r2_1","PredCN_r2_2","PredCN_r2_3","PredCN_r2_4","PredSA_r1_-4","PredSA_r1_-3","PredSA_r1_-2","PredSA_r1_-1","PredSA_r1","PredSA_r1_1","PredSA_r1_2","PredSA_r1_3","PredSA_r1_4","PredSA_r2_-4","PredSA_r2_-3","PredSA_r2_-2","PredSA_r2_-1","PredSA_r2","PredSA_r2_1","PredSA_r2_2","PredSA_r2_3","PredSA_r2_4","PredSS_freq_global_H","PredSS_freq_global_E","PredSS_freq_global_C","PredCN_freq_global_0","PredCN_freq_global_1","PredCN_freq_global_2","PredCN_freq_global_3","PredCN_freq_global_4","PredRCH_freq_global_0","PredRCH_freq_global_1","PredRCH_freq_global_2","PredRCH_freq_global_3","PredRCH_freq_global_4","PredSA_freq_global_0","PredSA_freq_global_1","PredSA_freq_global_2","PredSA_freq_global_3","PredSA_freq_global_4","AA_freq_central_A","AA_freq_central_R","AA_freq_central_N","AA_freq_central_D","AA_freq_central_C","AA_freq_central_Q","AA_freq_central_E","AA_freq_central_G","AA_freq_central_H","AA_freq_central_I","AA_freq_central_L","AA_freq_central_K","AA_freq_central_M","AA_freq_central_F","AA_freq_central_P","AA_freq_central_S","AA_freq_central_T","AA_freq_central_W","AA_freq_central_Y","AA_freq_central_V","PredSS_central_-2","PredSS_central_-1","PredSS_central","PredSS_central_1","PredSS_central_2","PredCN_central_-2","PredCN_central_-1","PredCN_central","PredCN_central_1","PredCN_central_2","PredRCH_central_-2","PredRCH_central_-1","PredRCH_central","PredRCH_central_1","PredRCH_central_2","PredSA_central_-2","PredSA_central_-1","PredSA_central","PredSA_central_1","PredSA_central_2","AA_freq_global_A","AA_freq_global_R","AA_freq_global_N","AA_freq_global_D","AA_freq_global_C","AA_freq_global_Q","AA_freq_global_E","AA_freq_global_G","AA_freq_global_H","AA_freq_global_I","AA_freq_global_L","AA_freq_global_K","AA_freq_global_M","AA_freq_global_F","AA_freq_global_P","AA_freq_global_S","AA_freq_global_T","AA_freq_global_W","AA_freq_global_Y","AA_freq_global_V","PSSM_r1_-4_A","PSSM_r1_-4_R","PSSM_r1_-4_N","PSSM_r1_-4_D","PSSM_r1_-4_C","PSSM_r1_-4_Q","PSSM_r1_-4_E","PSSM_r1_-4_G","PSSM_r1_-4_H","PSSM_r1_-4_I","PSSM_r1_-4_L","PSSM_r1_-4_K","PSSM_r1_-4_M","PSSM_r1_-4_F","PSSM_r1_-4_P","PSSM_r1_-4_S","PSSM_r1_-4_T","PSSM_r1_-4_W","PSSM_r1_-4_Y","PSSM_r1_-4_V","PSSM_r1_-3_A","PSSM_r1_-3_R","PSSM_r1_-3_N","PSSM_r1_-3_D","PSSM_r1_-3_C","PSSM_r1_-3_Q","PSSM_r1_-3_E","PSSM_r1_-3_G","PSSM_r1_-3_H","PSSM_r1_-3_I","PSSM_r1_-3_L","PSSM_r1_-3_K","PSSM_r1_-3_M","PSSM_r1_-3_F","PSSM_r1_-3_P","PSSM_r1_-3_S","PSSM_r1_-3_T","PSSM_r1_-3_W","PSSM_r1_-3_Y","PSSM_r1_-3_V","PSSM_r1_-2_A","PSSM_r1_-2_R","PSSM_r1_-2_N","PSSM_r1_-2_D","PSSM_r1_-2_C","PSSM_r1_-2_Q","PSSM_r1_-2_E","PSSM_r1_-2_G","PSSM_r1_-2_H","PSSM_r1_-2_I","PSSM_r1_-2_L","PSSM_r1_-2_K","PSSM_r1_-2_M","PSSM_r1_-2_F","PSSM_r1_-2_P","PSSM_r1_-2_S","PSSM_r1_-2_T","PSSM_r1_-2_W","PSSM_r1_-2_Y","PSSM_r1_-2_V","PSSM_r1_-1_A","PSSM_r1_-1_R","PSSM_r1_-1_N","PSSM_r1_-1_D","PSSM_r1_-1_C","PSSM_r1_-1_Q","PSSM_r1_-1_E","PSSM_r1_-1_G","PSSM_r1_-1_H","PSSM_r1_-1_I","PSSM_r1_-1_L","PSSM_r1_-1_K","PSSM_r1_-1_M","PSSM_r1_-1_F","PSSM_r1_-1_P","PSSM_r1_-1_S","PSSM_r1_-1_T","PSSM_r1_-1_W","PSSM_r1_-1_Y","PSSM_r1_-1_V","PSSM_r1_0_A","PSSM_r1_0_R","PSSM_r1_0_N","PSSM_r1_0_D","PSSM_r1_0_C","PSSM_r1_0_Q","PSSM_r1_0_E","PSSM_r1_0_G","PSSM_r1_0_H","PSSM_r1_0_I","PSSM_r1_0_L","PSSM_r1_0_K","PSSM_r1_0_M","PSSM_r1_0_F","PSSM_r1_0_P","PSSM_r1_0_S","PSSM_r1_0_T","PSSM_r1_0_W","PSSM_r1_0_Y","PSSM_r1_0_V","PSSM_r1_1_A","PSSM_r1_1_R","PSSM_r1_1_N","PSSM_r1_1_D","PSSM_r1_1_C","PSSM_r1_1_Q","PSSM_r1_1_E","PSSM_r1_1_G","PSSM_r1_1_H","PSSM_r1_1_I","PSSM_r1_1_L","PSSM_r1_1_K","PSSM_r1_1_M","PSSM_r1_1_F","PSSM_r1_1_P","PSSM_r1_1_S","PSSM_r1_1_T","PSSM_r1_1_W","PSSM_r1_1_Y","PSSM_r1_1_V","PSSM_r1_2_A","PSSM_r1_2_R","PSSM_r1_2_N","PSSM_r1_2_D","PSSM_r1_2_C","PSSM_r1_2_Q","PSSM_r1_2_E","PSSM_r1_2_G","PSSM_r1_2_H","PSSM_r1_2_I","PSSM_r1_2_L","PSSM_r1_2_K","PSSM_r1_2_M","PSSM_r1_2_F","PSSM_r1_2_P","PSSM_r1_2_S","PSSM_r1_2_T","PSSM_r1_2_W","PSSM_r1_2_Y","PSSM_r1_2_V","PSSM_r1_3_A","PSSM_r1_3_R","PSSM_r1_3_N","PSSM_r1_3_D","PSSM_r1_3_C","PSSM_r1_3_Q","PSSM_r1_3_E","PSSM_r1_3_G","PSSM_r1_3_H","PSSM_r1_3_I","PSSM_r1_3_L","PSSM_r1_3_K","PSSM_r1_3_M","PSSM_r1_3_F","PSSM_r1_3_P","PSSM_r1_3_S","PSSM_r1_3_T","PSSM_r1_3_W","PSSM_r1_3_Y","PSSM_r1_3_V","PSSM_r1_4_A","PSSM_r1_4_R","PSSM_r1_4_N","PSSM_r1_4_D","PSSM_r1_4_C","PSSM_r1_4_Q","PSSM_r1_4_E","PSSM_r1_4_G","PSSM_r1_4_H","PSSM_r1_4_I","PSSM_r1_4_L","PSSM_r1_4_K","PSSM_r1_4_M","PSSM_r1_4_F","PSSM_r1_4_P","PSSM_r1_4_S","PSSM_r1_4_T","PSSM_r1_4_W","PSSM_r1_4_Y","PSSM_r1_4_V","PSSM_r2_-4_A","PSSM_r2_-4_R","PSSM_r2_-4_N","PSSM_r2_-4_D","PSSM_r2_-4_C","PSSM_r2_-4_Q","PSSM_r2_-4_E","PSSM_r2_-4_G","PSSM_r2_-4_H","PSSM_r2_-4_I","PSSM_r2_-4_L","PSSM_r2_-4_K","PSSM_r2_-4_M","PSSM_r2_-4_F","PSSM_r2_-4_P","PSSM_r2_-4_S","PSSM_r2_-4_T","PSSM_r2_-4_W","PSSM_r2_-4_Y","PSSM_r2_-4_V","PSSM_r2_-3_A","PSSM_r2_-3_R","PSSM_r2_-3_N","PSSM_r2_-3_D","PSSM_r2_-3_C","PSSM_r2_-3_Q","PSSM_r2_-3_E","PSSM_r2_-3_G","PSSM_r2_-3_H","PSSM_r2_-3_I","PSSM_r2_-3_L","PSSM_r2_-3_K","PSSM_r2_-3_M","PSSM_r2_-3_F","PSSM_r2_-3_P","PSSM_r2_-3_S","PSSM_r2_-3_T","PSSM_r2_-3_W","PSSM_r2_-3_Y","PSSM_r2_-3_V","PSSM_r2_-2_A","PSSM_r2_-2_R","PSSM_r2_-2_N","PSSM_r2_-2_D","PSSM_r2_-2_C","PSSM_r2_-2_Q","PSSM_r2_-2_E","PSSM_r2_-2_G","PSSM_r2_-2_H","PSSM_r2_-2_I","PSSM_r2_-2_L","PSSM_r2_-2_K","PSSM_r2_-2_M","PSSM_r2_-2_F","PSSM_r2_-2_P","PSSM_r2_-2_S","PSSM_r2_-2_T","PSSM_r2_-2_W","PSSM_r2_-2_Y","PSSM_r2_-2_V","PSSM_r2_-1_A","PSSM_r2_-1_R","PSSM_r2_-1_N","PSSM_r2_-1_D","PSSM_r2_-1_C","PSSM_r2_-1_Q","PSSM_r2_-1_E","PSSM_r2_-1_G","PSSM_r2_-1_H","PSSM_r2_-1_I","PSSM_r2_-1_L","PSSM_r2_-1_K","PSSM_r2_-1_M","PSSM_r2_-1_F","PSSM_r2_-1_P","PSSM_r2_-1_S","PSSM_r2_-1_T","PSSM_r2_-1_W","PSSM_r2_-1_Y","PSSM_r2_-1_V","PSSM_r2_0_A","PSSM_r2_0_R","PSSM_r2_0_N","PSSM_r2_0_D","PSSM_r2_0_C","PSSM_r2_0_Q","PSSM_r2_0_E","PSSM_r2_0_G","PSSM_r2_0_H","PSSM_r2_0_I","PSSM_r2_0_L","PSSM_r2_0_K","PSSM_r2_0_M","PSSM_r2_0_F","PSSM_r2_0_P","PSSM_r2_0_S","PSSM_r2_0_T","PSSM_r2_0_W","PSSM_r2_0_Y","PSSM_r2_0_V","PSSM_r2_1_A","PSSM_r2_1_R","PSSM_r2_1_N","PSSM_r2_1_D","PSSM_r2_1_C","PSSM_r2_1_Q","PSSM_r2_1_E","PSSM_r2_1_G","PSSM_r2_1_H","PSSM_r2_1_I","PSSM_r2_1_L","PSSM_r2_1_K","PSSM_r2_1_M","PSSM_r2_1_F","PSSM_r2_1_P","PSSM_r2_1_S","PSSM_r2_1_T","PSSM_r2_1_W","PSSM_r2_1_Y","PSSM_r2_1_V","PSSM_r2_2_A","PSSM_r2_2_R","PSSM_r2_2_N","PSSM_r2_2_D","PSSM_r2_2_C","PSSM_r2_2_Q","PSSM_r2_2_E","PSSM_r2_2_G","PSSM_r2_2_H","PSSM_r2_2_I","PSSM_r2_2_L","PSSM_r2_2_K","PSSM_r2_2_M","PSSM_r2_2_F","PSSM_r2_2_P","PSSM_r2_2_S","PSSM_r2_2_T","PSSM_r2_2_W","PSSM_r2_2_Y","PSSM_r2_2_V","PSSM_r2_3_A","PSSM_r2_3_R","PSSM_r2_3_N","PSSM_r2_3_D","PSSM_r2_3_C","PSSM_r2_3_Q","PSSM_r2_3_E","PSSM_r2_3_G","PSSM_r2_3_H","PSSM_r2_3_I","PSSM_r2_3_L","PSSM_r2_3_K","PSSM_r2_3_M","PSSM_r2_3_F","PSSM_r2_3_P","PSSM_r2_3_S","PSSM_r2_3_T","PSSM_r2_3_W","PSSM_r2_3_Y","PSSM_r2_3_V","PSSM_r2_4_A","PSSM_r2_4_R","PSSM_r2_4_N","PSSM_r2_4_D","PSSM_r2_4_C","PSSM_r2_4_Q","PSSM_r2_4_E","PSSM_r2_4_G","PSSM_r2_4_H","PSSM_r2_4_I","PSSM_r2_4_L","PSSM_r2_4_K","PSSM_r2_4_M","PSSM_r2_4_F","PSSM_r2_4_P","PSSM_r2_4_S","PSSM_r2_4_T","PSSM_r2_4_W","PSSM_r2_4_Y","PSSM_r2_4_V","PSSM_central_-2_A","PSSM_central_-2_R","PSSM_central_-2_N","PSSM_central_-2_D","PSSM_central_-2_C","PSSM_central_-2_Q","PSSM_central_-2_E","PSSM_central_-2_G","PSSM_central_-2_H","PSSM_central_-2_I","PSSM_central_-2_L","PSSM_central_-2_K","PSSM_central_-2_M","PSSM_central_-2_F","PSSM_central_-2_P","PSSM_central_-2_S","PSSM_central_-2_T","PSSM_central_-2_W","PSSM_central_-2_Y","PSSM_central_-2_V","PSSM_central_-1_A","PSSM_central_-1_R","PSSM_central_-1_N","PSSM_central_-1_D","PSSM_central_-1_C","PSSM_central_-1_Q","PSSM_central_-1_E","PSSM_central_-1_G","PSSM_central_-1_H","PSSM_central_-1_I","PSSM_central_-1_L","PSSM_central_-1_K","PSSM_central_-1_M","PSSM_central_-1_F","PSSM_central_-1_P","PSSM_central_-1_S","PSSM_central_-1_T","PSSM_central_-1_W","PSSM_central_-1_Y","PSSM_central_-1_V","PSSM_central_0_A","PSSM_central_0_R","PSSM_central_0_N","PSSM_central_0_D","PSSM_central_0_C","PSSM_central_0_Q","PSSM_central_0_E","PSSM_central_0_G","PSSM_central_0_H","PSSM_central_0_I","PSSM_central_0_L","PSSM_central_0_K","PSSM_central_0_M","PSSM_central_0_F","PSSM_central_0_P","PSSM_central_0_S","PSSM_central_0_T","PSSM_central_0_W","PSSM_central_0_Y","PSSM_central_0_V","PSSM_central_1_A","PSSM_central_1_R","PSSM_central_1_N","PSSM_central_1_D","PSSM_central_1_C","PSSM_central_1_Q","PSSM_central_1_E","PSSM_central_1_G","PSSM_central_1_H","PSSM_central_1_I","PSSM_central_1_L","PSSM_central_1_K","PSSM_central_1_M","PSSM_central_1_F","PSSM_central_1_P","PSSM_central_1_S","PSSM_central_1_T","PSSM_central_1_W","PSSM_central_1_Y","PSSM_central_1_V","PSSM_central_2_A","PSSM_central_2_R","PSSM_central_2_N","PSSM_central_2_D","PSSM_central_2_C","PSSM_central_2_Q","PSSM_central_2_E","PSSM_central_2_G","PSSM_central_2_H","PSSM_central_2_I","PSSM_central_2_L","PSSM_central_2_K","PSSM_central_2_M","PSSM_central_2_F","PSSM_central_2_P","PSSM_central_2_S","PSSM_central_2_T","PSSM_central_2_W","PSSM_central_2_Y","PSSM_central_2_V")
+def discretizeDF(df: DataFrame, lstart: Int, lend: Int)
+  : DataFrame = {
+
+  def discretizeNominal(df: DataFrame, idx: Int): DataFrame = {
+    // Try to discretize everything except the label
+    // if(idx < nColumns - 1){
+    if(idx < lend){
+      // if(attrs(idx).isNumeric){
+      if(attrsTypes(idx)){
+        // val name = attrs(idx).name.get
+        val name = attrsNames(idx)
+        val discretizer = (new QuantileDiscretizer()
+          .setNumBuckets(nBinsPerColumn(idx))
+          .setInputCol(name)
+          .setOutputCol(name + "-discretized")
+        )
+        // Test if caching if needed here!
+        discretizeNominal(discretizer.fit(df).transform(df), idx + 1)
+      } else discretizeNominal(df, idx + 1)
+    } else df
+  }
+
+  discretizeNominal(df, lstart)
+}
+
+
+
+val limits = Array(0,161,231,301,371,441,511,581,630)
+// val df = spark.read.parquet(args(0)).persist(org.apache.spark.storage.StorageLevel.MEMORY_ONLY)
+val df = spark.read.parquet(args(0))
+
+for( i <- 0 to limits.size - 2) {
+
+  val lstart = limits(i)
+  val lend = limits(i + 1)
+  
+  val reducedDF = df.select(attrsNames(lstart), attrsNames.slice(lstart + 1,lend):_*)
+
+  val discretizedDF = discretizeDF(reducedDF, lstart, lend)
+  discretizedDF.write.format("parquet").save(args(0).split('.').head + "discretized" + lstart.toString + "-" + (lend-1).toString + ".parquet")
+  
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     // val metadata: Metadata = ...
     // df.select($"colA".as("colB", metadata))
