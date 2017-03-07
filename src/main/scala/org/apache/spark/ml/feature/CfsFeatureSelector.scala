@@ -1,6 +1,5 @@
 package org.apache.spark.ml.feature
 
-import org.apache.spark.rdd.RDD
 import org.apache.spark.ml.linalg.Vector
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.Row
@@ -20,20 +19,14 @@ class CfsFeatureSelector {
     useNFeatsForPopulationSize: Boolean, 
     optIslandPopulationSize: Int): BitSet = {
 
-    // Transform DataFrame to RDD[LabeledPoint]
-    val data: RDD[LabeledPoint] = df.rdd.map {
-      case Row(features: Vector, label: Double) =>
-        LabeledPoint(label, features)
-    }
-
-    val nFeats = data.take(1)(0).features.size
-    val nInstances: Long = data.count
+    val nFeats = df.take(1)(0)(0).asInstanceOf[Vector].size
+    val nInstances: Long = df.count
     // By convention it is considered that class is stored after the last
     // feature in the correlations matrix
     val iClass = nFeats
     // The number of feats must include the class (nFeats + 1)
     val contingencyTablesMatrix = 
-      ContingencyTablesMatrix(data, nFeats + 1)
+      ContingencyTablesMatrix(df, nFeats + 1)
     // The number of feats must include the class (nFeats + 1)
     val correlations = CorrelationsMatrix(
       new SymmetricUncertaintyCorrelator(
@@ -49,7 +42,7 @@ class CfsFeatureSelector {
 
     val subsetEvaluator = if(useGAOptimizer) {
       // In this case the CorrelationsMatrix is broadcasted
-      val correlationsBC = data.context.broadcast(correlations)
+      val correlationsBC = df.sparkSession.sparkContext.broadcast(correlations)
       new CfsSubsetEvaluator(Some(correlationsBC), None)
     } else {
       // In this case the CorrelationsMatrix is local to the driver
@@ -58,7 +51,7 @@ class CfsFeatureSelector {
 
     val optimizer = if(useGAOptimizer) {
 
-      val nIslands = data.context.defaultParallelism
+      val nIslands = df.sparkSession.sparkContext.defaultParallelism
 
       val islandPopulationSize: Int = 
         if(useNFeatsForPopulationSize) {
