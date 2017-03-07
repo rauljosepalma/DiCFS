@@ -21,5 +21,5 @@ project/plugins/project/
 .ensime
 
 # Sublime Text
-.sublime-project
-.sublime-workspace
+*.sublime-project
+*.sublime-workspace

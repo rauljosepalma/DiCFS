@@ -3,7 +3,7 @@
 
 # Local
 
-spark-submit --master local[*] --class org.apache.spark.ml.feature.Main /home/raul/Desktop/SparkCFS/project-files/target/scala-2.11/spark-cfs_2.11-0.1.0-SNAPSHOT.jar  "/home/raul/Datasets/Medium/covtype-discrete.arff" useLocallyPred=false useGA=true usePopGTEnFeats=true optIslandPopulationSize=30 &> /home/raul/Desktop/SparkCFS/project-files/src/test/spark.log
+spark-submit --master local[*] --class org.apache.spark.ml.feature.Main /home/raul/Desktop/SparkCFS/project-files/target/scala-2.11/spark-cfs_2.11-0.1.0-SNAPSHOT.jar  "/home/raul/Datasets/Medium/covtype-discrete.arff" useLocallyPred=false useGA=true useNFeatsForPopulationSize=true optIslandPopulationSize=30 &> /home/raul/Desktop/SparkCFS/project-files/src/test/spark.log
 
 spark-submit --master local[*] --class org.apache.spark.ml.feature.Main --packages sramirez:spark-MDLP-discretization:1.2.1 /home/raul/Desktop/SparkCFS/project-files/target/scala-2.10/spark-cfs_2.10-0.1.0-SNAPSHOT.jar  "/home/raul/Datasets/Large/ECBDL14/head1000_train.parquet" &> /home/raul/Desktop/SparkCFS/project-files/src/test/spark.log
 
@@ -18,14 +18,22 @@ spark-submit --master local --class org.apache.spark.ml.feature.Main --packages 
 spark-shell --packages "spark-relieff:spark-relieff_2.10:0.1.0-SNAPSHOT" 
 
 # Cluster
+/opt/spark/bin/spark-submit --class org.apache.spark.ml.feature.Main /root/cfs.jar hdfs://master:8020/datasets/ECBDL14_train-discretized.parquet useLocallyPred=true useGA=true useNFeatsForPopulationSize=true optIslandPopulationSize=0
+
 /opt/spark/bin/spark-submit --class org.apache.spark.ml.feature.Main /root/relieff.jar hdfs://master:8020/datasets/ECBDL14_${i}percFeats.parquet /root/results/
 
-/opt/spark/bin/spark-submit --class org.apache.spark.ml.feature.Main --packages sramirez:spark-MDLP-discretization:1.2.1 /root/QuantileDiscretizer.jar  hdfs://master:8020/datasets/ECBDL14_{0}percFeats.parquet
+/opt/spark/bin/spark-submit --class org.apache.spark.ml.feature.Main --packages rauljosepalma:spark-mltools:0.1.0-SNAPSHOT /root/merger.jar  hdfs://master:8020/datasets/ECBDL14_{0}percFeats.parquet
+
 
 # Update .jar
-scp /home/raul/Desktop/SparkCFS/project-files/target/scala-2.11/spark-cfs_2.11-0.1.0-SNAPSHOT.jar root@master:/root/cfs.jar
+scp /home/raul/Desktop/SparkCFS/target/scala-2.11/spark-cfs_2.11-0.1.0-SNAPSHOT.jar root@master:/root/cfs.jar
+# Update fat .jar
+scp /home/raul/Desktop/SparkCFS/target/scala-2.11/spark-cfs-assembly-0.1.0-SNAPSHOT.jar root@master:/root/cfs.jar
+
 # Update cluster-todo.sh
-scp /home/raul/Desktop/SparkCFS/project-files/src/scripts/cluster-todo.sh root@master:/root/cluster-todo.sh
+scp /home/raul/Desktop/SparkCFS/src/scripts/cluster-todo.sh root@master:/root/cluster-todo.sh
+# Update remote local ivy cache (this only works if Spark is restarted)
+scp -r /home/raul/.ivy2/local/*** root@master:/root/.ivy2/local/
 
 # Get results
 scp root@master:/root/results/ECBDL14/** "/home/raul/Desktop/PhD/Papers/2016 06 - DReliefF/project-files/results/ECBDL14/"
