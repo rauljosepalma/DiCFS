@@ -34,28 +34,15 @@ object Main {
     // Reduce verbosity
     sc.setLogLevel("WARN")
     
-    val df = args(0).split('.').last match {
-      case "arff" => 
-        val (df1, excepts) = DataFrameIO.readDFFromArff(args(0))
-        // Print errors in case they happened
-        if (!excepts.isEmpty) {
-          println("Exceptions found during parsing:")
-          excepts.foreach(println)
-        }
-        df1
-      case "libsvm" => 
-        DataFrameIO.readDFFromSVM(
-            args(0), args(2).toInt, Array(args(3), args(4)))
-      case "parquet" =>
-        spark.read.parquet(args(0))
-    }
+    val df = DataFrameIO.readDFFromAny(args(0))
+    // ex.: hdfs://master:8020/datasets
+    val dfPath = args(0).slice(0, args(0).lastIndexOf("/"))
+    // ex.: ECBDL14_train
+    val dfName = args(0).split('/').last.split('.').head
+    // Note that this basePath is for @master
+    val debugFileBasePath = "/root/results/" + dfName
 
     // // CFS Model
-
-    // // Gets the datasets basename
-    // // val baseName = args(0).split('_').head.split('/').last
-    // // // Ex.: /root/ECBDL14_k10m40_feats_weights.txt
-    // // val basePath = args(1) + "/" + baseName + "_k" + args(2) + "m" + args(3) + "ramp" + args(5)
 
     // // CFS Feature Selection
     // // args(0) Dataset full location
@@ -63,6 +50,7 @@ object Main {
     val feats: BitSet = 
       featureSelector.fit(
         df,
+        debugFileBasePath,
         args(1).stripPrefix("useLocallyPred=").toBoolean,
         args(2).stripPrefix("useGA=").toBoolean,
         args(3).stripPrefix("useNFeatsForPopulationSize=").toBoolean,

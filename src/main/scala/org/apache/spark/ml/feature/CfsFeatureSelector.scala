@@ -14,7 +14,11 @@ class CfsFeatureSelector {
   // df DataFrame must be cached and discretized
   def fit(
     df: DataFrame,
+    debugFileBasePath: String,
     addLocalFeats:Boolean, 
+    // partitionSize: Int,
+
+
     useGAOptimizer: Boolean, 
     useNFeatsForPopulationSize: Boolean, 
     optIslandPopulationSize: Int): BitSet = {
@@ -31,6 +35,13 @@ class CfsFeatureSelector {
     val correlations = CorrelationsMatrix(
       new SymmetricUncertaintyCorrelator(
         contingencyTablesMatrix, nInstances), nFeats + 1)
+
+    // DEBUG
+    var file = new java.io.FileWriter(
+      s"${debugFileBasePath}_correlations.txt", true)
+    file.write(correlations.toString)
+    file.close
+
 
     // DEBUG
     // println("CORRELATIONS MATRIX=")
@@ -105,13 +116,11 @@ class CfsFeatureSelector {
       
     }
 
-    //DEBUG
-    println("NUMBER OF EVALUATIONS=" + subsetEvaluator.numOfEvaluations)
-
     val result: EvaluatedState[BitSet] = optimizer.search
     val subset: BitSet = result.state.data
     
-    // DEBUG
+    //DEBUG
+    println("NUMBER OF EVALUATIONS=" + subsetEvaluator.numOfEvaluations)
     println("BEST SUBSET = " + result.toString)
     
     // Add locally predictive feats is requested
@@ -161,4 +170,5 @@ class CfsFeatureSelector {
       subset
     }
   }
+
 }

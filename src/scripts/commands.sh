@@ -59,23 +59,26 @@ java -Xmx3800m weka.attributeSelection.ReliefFAttributeEval -M 10 -D 1 -K 10 -i 
 
 # CFS
 
-# -D 1 = Direction Fordward
+# -D 1 = Direction Forward
 # -N 5 = Max fails 5
 # -L   = Locally predictive false (remove for true)
 # -P 1 = Pool size 1
 # -E 1 = Threads number 1
-java -Xmx3800m  weka.attributeSelection.CfsSubsetEval -s "weka.attributeSelection.BestFirst -D 1 -N 5 -S 0" -L -P 1 -E 1 -i /home/raul/Datasets/Medium/covtype-discrete.arff &> /home/raul/Desktop/SparkCFS/project-files/src/test/weka.log
-java -Xmx3800m  weka.attributeSelection.CfsSubsetEval -s "weka.attributeSelection.BestFirst -D 1 -N 5 -S 3" -L -P 1 -E 1 -i /home/raul/Datasets/Medium/covtype-discrete.arff &> /home/raul/Desktop/SparkCFS/project-files/src/test/weka.log
+java -Xmx3800m  weka.attributeSelection.CfsSubsetEval -s "weka.attributeSelection.BestFirst -D 1 -N 5" -L -P 1 -E 1 -i /home/raul/Datasets/Medium/covtype-discrete.arff &> /home/raul/Desktop/SparkCFS/project-files/src/test/weka.log
+java -Xmx3800m  weka.attributeSelection.CfsSubsetEval -s "weka.attributeSelection.BestFirst -D 1 -N 5" -L -P 1 -E 1 -i /home/raul/Datasets/Medium/covtype-discrete.arff &> /home/raul/Desktop/SparkCFS/project-files/src/test/weka.log
 
 # Discretize
 # -c last = Use last attribute as class
 java -Xmx3800m  weka.filters.supervised.attribute.Discretize -R first-last -precision 6 -c last -i /home/raul/Datasets/Medium/covtype.arff -o /home/raul/Datasets/Medium/covtype-weka-discrete.arff &> /home/raul/Desktop/SparkCFS/project-files/src/test/weka.log
 
 # Cluster #
+export CLASSPATH=/home/raul/software/weka-3-8-0/weka.jar
 
 # Discretize
-export CLASSPATH=/home/raul/software/weka-3-8-0/weka.jar
-{ time java -Xmx120g  weka.filters.supervised.attribute.Discretize -R first-last -precision 6 -c last -i /home/raul/datasets/ECBDL14/ECBDL14_05perc.arff -o /home/raul/datasets/ECBDL14/ECBDL14_05perc_discreteFayyadIrani.arff ; } &> /home/raul/results/weka/ECBDL14_05perc_discreteFayyadIrani.arff-time.txt &
+{ time java -Xmx120g  weka.filters.supervised.attribute.Discretize -R first-last -precision 6 -c last -i /home/raul/datasets/HIGGS/HIGGS.arff -o /home/raul/datasets/HIGGS/HIGGS_discrete.arff ; } &> /home/raul/results/weka/HIGGS_discreteFay.arff-time.txt &
+
+# CFS
+{ time java -Xmx120g  weka.attributeSelection.CfsSubsetEval -s "weka.attributeSelection.BestFirst -D 1 -N 5" -L -P 14 -E 14 -i /home/raul/datasets/HIGGS/HIGGS_discreteFay.arff ; } &> /home/raul/results/weka/HIGGS_discreteFay.arff-time.txt &
 
 
 ## HADOOP & HDFS ##

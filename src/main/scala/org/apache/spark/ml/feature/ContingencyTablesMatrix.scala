@@ -16,10 +16,11 @@ class ContingencyTablesMatrix(val nFeats: Int) extends Serializable {
 
   // keys for external map must meet: first <= last
   val tables:
-    immutable.Map[(Int,Int), mutable.Map[(Int,Int), Int]] = {
+    immutable.Map[(Int,Int), mutable.Map[(Double,Double), Int]] = {
     
-    val featsValuesMaps: immutable.Vector[mutable.Map[(Int,Int), Int]] =
-      immutable.Vector.fill(featsIndexes.size)((new mutable.HashMap[(Int,Int), Int]).withDefaultValue(0))
+    val featsValuesMaps: immutable.Vector[mutable.Map[(Double,Double), Int]] =
+      immutable.Vector.fill(featsIndexes.size)(
+        (new mutable.HashMap[(Double,Double), Int]).withDefaultValue(0))
 
     featsIndexes.zip(featsValuesMaps).toMap
   }
@@ -27,9 +28,9 @@ class ContingencyTablesMatrix(val nFeats: Int) extends Serializable {
   // This is for preventing the driver to calculate the entropies from
   // the contingency tables directly a let the workers do part of the job
   // in the aggregate action.
-  val featsValuesCounts: immutable.Vector[mutable.Map[Int,Int]] =
+  val featsValuesCounts: immutable.Vector[mutable.Map[Double,Int]] =
     immutable.Vector
-      .fill(nFeats)((new mutable.HashMap[Int,Int]).withDefaultValue(0))
+      .fill(nFeats)((new mutable.HashMap[Double,Int]).withDefaultValue(0))
   
 }
 
@@ -61,19 +62,21 @@ object ContingencyTablesMatrix {
     def accumulator (matrix: ContingencyTablesMatrix, row: Row):
       ContingencyTablesMatrix = {
 
-      val features: IndexedSeq[Int] = 
-        row(0).asInstanceOf[Vector].toArray.map(_.toInt) :+ 
-        row(1).asInstanceOf[Double].toInt
+      val features = row(0).asInstanceOf[Vector]
+      val label = row(1).asInstanceOf[Integer].toDouble
 
       // Accumulate featsValuesCounts for entropy calculation
-      (0 until matrix.nFeats).foreach{ iFeat => 
+      (0 until matrix.nFeats-1).foreach{ iFeat => 
         matrix.featsValuesCounts(iFeat)(features(iFeat)) += 1 }
+      matrix.featsValuesCounts(matrix.nFeats - 1)(label) += 1 
 
       // Accumulate contingency tables counts
       // Entry for (features(i),features(j)) is different that for 
       // (features(j),features(i)) (order is important)
       matrix.featsIndexes.foreach{ case (i,j) => 
-        matrix.tables((i,j))(features(i),features(j)) += 1
+        matrix.tables((i,j))(
+          if (i == matrix.nFeats-1) label else features(i),
+          if (j == matrix.nFeats-1) label else features(j)) += 1
       }
 
       matrix

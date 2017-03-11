@@ -16,9 +16,9 @@ class SymmetricUncertaintyCorrelator(
   // Entropies are frequently needed by the method correlate,
   // so they are calculated and cached
   private val entropies: Vector[Double] = 
-    ctm.featsValuesCounts.map{ valuesCounts: mutable.Map[Int, Int] =>
+    ctm.featsValuesCounts.map{ valuesCounts: mutable.Map[Double, Int] =>
       (valuesCounts
-        .map{ case (value, count) => count * log(count) }
+        .map{ case (_, count) => count * log(count) }
         // Using nInstances assumes that there are no missing values
         .sum * (-1.0/nInstances) + log(nInstances)
       )
@@ -33,7 +33,7 @@ class SymmetricUncertaintyCorrelator(
   private def conditionalEntropy(iConditionedFeat: Int, iFeat: Int): Double = {
     
     ctm.tables(iConditionedFeat, iFeat)
-      .map{ case (featsValues, count) => count * log(count) }
+      .map{ case (_, count) => count * log(count) }
       .sum * (-1.0/nInstances) - entropies(iFeat) + log(nInstances)
 
   }
@@ -61,4 +61,5 @@ class SymmetricUncertaintyCorrelator(
       correlation
     }
   }
+
 }

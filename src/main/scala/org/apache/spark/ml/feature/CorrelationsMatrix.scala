@@ -25,6 +25,16 @@ class CorrelationsMatrix(
       linearMatrix(position.toInt)
     }
   }
+
+  override def toString(): String =  {
+    val linearMatrix: IndexedSeq[Double] = 
+      (0 until nFeats).flatMap { iFeatA =>
+        (iFeatA + 1 until nFeats)
+          .map{ iFeatB => this(iFeatA, iFeatB) }
+      }
+
+    linearMatrix.mkString(",")
+  } 
 }
 
 // Companion object created to prevent the serialization of the correlator
