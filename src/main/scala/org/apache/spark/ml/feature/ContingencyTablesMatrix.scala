@@ -6,6 +6,7 @@ import org.apache.spark.sql.Row
 
 import scala.collection.mutable
 import scala.collection.immutable
+import scala.collection.mutable.BitSet
 
 // remainingFeatsSize is used olny in the first time when precalcEntropies is
 // true and consecuently it will be equal to nFeats
@@ -51,7 +52,7 @@ object ContingencyTablesMatrix {
   // element.
   def apply(
     df: DataFrame, 
-    remainingFeats: Seq[Int],
+    remainingFeats: BitSet,
     remainingFeatsPairs: Seq[(Int,Int)], 
     precalcEntropies: Boolean): ContingencyTablesMatrix = {
 

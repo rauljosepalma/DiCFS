@@ -4,11 +4,12 @@ import org.apache.spark.ml.linalg.Vector
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.Row
 
+import scala.collection.mutable.BitSet
 
 class CfsFeatureSelector {
 
   // Searches a subset of features given the data
-  // Returns a Seq[Int] containing the selected features
+  // Returns a BitSet containing the selected features
   // df DataFrame must be discretized
   // If partitionSize == nFeats in df, then no partitioning is perfomed
   def fit(
@@ -17,7 +18,7 @@ class CfsFeatureSelector {
     addLocalFeats: Boolean, 
     maxFails: Int,
     partitionSize: Int,
-    restrictPartitionSizeIncrease: Boolean): Seq[Int] = {
+    restrictPartitionSizeIncrease: Boolean): BitSet = {
 
     val nFeats = df.take(1)(0)(0).asInstanceOf[Vector].size
     val nInstances: Long = df.count
@@ -32,10 +33,10 @@ class CfsFeatureSelector {
     // discarded!
     // remainingFeats are not necessarly in order (140,141,142, etc)
     def findSubset(
-      remainingFeats: Seq[Int], 
+      remainingFeats: BitSet, 
       entropies: IndexedSeq[Double],
       correlations: CorrelationsMatrix,
-      forceSinglePartition: Boolean = false): Seq[Int] = {
+      forceSinglePartition: Boolean = false): BitSet = {
 
       // The first time this function is called correlations matrix is empty
       val isFirstTime = correlations.isEmpty
@@ -48,13 +49,13 @@ class CfsFeatureSelector {
       }
       // Sequential splits of partitionSize from features Ex.: If
       // remainingFeats.size = 5, 2 size splits are: [[0,1],[2,3],[4]]
-      val partitions: Seq[Seq[Int]] = {
+      val partitions: Seq[BitSet] = {
         (0 until nPartitions - 1).map{ i => 
           Range(i*partitionSize, (i+1) * partitionSize)
         } :+ 
         Range((nPartitions-1) * partitionSize, remainingFeats.size)
       // Partitions indexes must be mapped to the remainingFeats
-      }.map{ p =>  p.map(remainingFeats).sorted }
+      }.map{ p =>  BitSet(p.map(remainingFeats.toSeq):_*) }
 
       // DEBUG
       println("partitions:")
@@ -66,14 +67,14 @@ class CfsFeatureSelector {
         partitions.flatMap{ partition => 
           // The first time partitions include the class 
           val partitionAndClass = {
-            if(isFirstTime) partition :+ iClass
+            if(isFirstTime) partition + iClass
             else partition
           }
-          partitionAndClass.combinations(2)
+          partitionAndClass.toSeq.combinations(2)
             .filter{ pair =>
               !correlations.keys.contains(pair(0), pair(1)) }
             .map{ pair => (pair(0), pair(1)) }
-        }.toSeq
+        }
 
       // DEBUG
       println("remainingFeats:")
@@ -83,7 +84,7 @@ class CfsFeatureSelector {
 
       val ctm = ContingencyTablesMatrix(
         df, 
-        if (isFirstTime) remainingFeats :+ iClass else remainingFeats,
+        if (isFirstTime) remainingFeats + iClass else remainingFeats,
         remainingFeatsPairs,
         precalcEntropies=isFirstTime)
 
@@ -99,7 +100,7 @@ class CfsFeatureSelector {
       val subsetEvaluator = new CfsSubsetEvaluator(correlations, iClass)
 
       // Search subsets on each partition, merge results.
-      val newRemainingFeats: Seq[Int] = 
+      val newRemainingFeats: BitSet = 
         findAndMergeSubsetsInPartitions(partitions, subsetEvaluator, maxFails)
 
       //DEBUG
@@ -140,35 +141,36 @@ class CfsFeatureSelector {
     }
 
     findSubset(
-      remainingFeats = List.range(0, nFeats), 
+      remainingFeats = BitSet(Range(0, nFeats):_*), 
       entropies = IndexedSeq(),
       correlations = new CorrelationsMatrix)
 
   }
 
   private def findAndMergeSubsetsInPartitions(
-    partitions: Seq[Seq[Int]], 
+    partitions: Seq[BitSet], 
     evaluator: CfsSubsetEvaluator,
-    maxFails: Int): Seq[Int] = {
+    maxFails: Int): BitSet = {
 
-    partitions.flatMap{ partition => 
+    val mergedFeats: Seq[Int] = 
+      partitions.flatMap{ partition => 
+        val optimizer = 
+          new BestFirstSearcher(
+            initialState = new FeaturesSubset(BitSet(), partition),
+            evaluator,
+            maxFails)
+        val result: EvaluatedState[BitSet] = optimizer.search
+        
+        result.state.data
+      }
 
-      val optimizer = 
-        new BestFirstSearcher(
-          initialState = new FeaturesSubset(Seq(), partition),
-          evaluator,
-          maxFails)
-      val result: EvaluatedState[Seq[Int]] = optimizer.search
-      val subset: Seq[Int] = result.state.data
-      
-      subset.toSeq
-    }
+    BitSet(mergedFeats:_*)
   }
 
   private def addLocallyPredictiveFeats(
-    selectedSubset: Seq[Int], 
+    selectedSubset: BitSet, 
     correlations: CorrelationsMatrix, 
-    iClass: Int) : Seq[Int] = {
+    iClass: Int) : BitSet = {
 
     // Descending order remaining feats according to their correlation with
     // the class
@@ -179,7 +181,7 @@ class CfsFeatureSelector {
           (a, b) => correlations(a, iClass) > correlations(b, iClass)}
 
     def doAddFeats(
-      extendedSubset: Seq[Int], orderedCandFeats: Seq[Int]): Seq[Int] = {
+      extendedSubset: BitSet, orderedCandFeats: Seq[Int]): BitSet = {
 
       if (orderedCandFeats.isEmpty) {
         extendedSubset
@@ -196,7 +198,7 @@ class CfsFeatureSelector {
           // DEBUG
           println(s"ADDING LOCALLY PREDICTIVE FEAT: $candFeat")
           doAddFeats(
-            extendedSubset :+ candFeat, orderedCandFeats.tail)
+            extendedSubset + candFeat, orderedCandFeats.tail)
         // Ignore feat
         } else {
           doAddFeats(extendedSubset, orderedCandFeats.tail)

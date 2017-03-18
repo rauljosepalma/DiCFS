@@ -12,8 +12,7 @@ import org.apache.spark.ml.attribute._
 import org.apache.spark.sql.types.{DoubleType, StructField, StructType}
 import org.apache.spark.util.CollectionAccumulator
 
-import scala.collection.mutable
-import scala.collection.mutable.Buffer
+import scala.collection.mutable.BitSet
 import scala.collection.JavaConverters._
 import scala.util.{Failure, Success, Try}
 
@@ -48,7 +47,7 @@ object Main {
     // // CFS Feature Selection
     // // args(0) Dataset full location
     val featureSelector = new CfsFeatureSelector
-    val feats: Seq[Int] = 
+    val feats: BitSet = 
       featureSelector.fit(
         df,
         resultsFileBasePath,

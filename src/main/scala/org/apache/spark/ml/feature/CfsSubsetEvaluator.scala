@@ -1,11 +1,12 @@
 package org.apache.spark.ml.feature
 
 import scala.math.sqrt
+import scala.collection.mutable.BitSet
 
 // The option parameters are needed because the evaluator can run on the driver
 // or on the workers.
 class CfsSubsetEvaluator(correlations: CorrelationsMatrix, iClass: Int)
-  extends StateEvaluator[Seq[Int]] {
+  extends StateEvaluator[BitSet] {
 
   // TODO 
   // Caching was disabled since, in the case of distributed execution,
@@ -17,15 +18,15 @@ class CfsSubsetEvaluator(correlations: CorrelationsMatrix, iClass: Int)
   // A WeakHashMap does not creates strong references, so its elements
   // can be garbage collected if there are no other references to it than this,
   // in the case of BestFirstSearch, the subsets are stored in the queue
-  // var cache: WeakHashMap[Seq[Int], Double] = WeakHashMap[Seq[Int],Double]()
+  // var cache: WeakHashMap[BitSet, Double] = WeakHashMap[BitSet,Double]()
 
   var numOfEvaluations = 0
 
   // Evals a given subset of features
-  override def evaluate(state: EvaluableState[Seq[Int]]): 
+  override def evaluate(state: EvaluableState[BitSet]): 
     Double = {
 
-    val subset: Seq[Int] = state.data
+    val subset: BitSet = state.data
 
     // if(cache.contains(subset)) {
     //   cache(subset)
