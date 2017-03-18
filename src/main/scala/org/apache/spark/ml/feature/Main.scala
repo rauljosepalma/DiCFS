@@ -12,7 +12,7 @@ import org.apache.spark.ml.attribute._
 import org.apache.spark.sql.types.{DoubleType, StructField, StructType}
 import org.apache.spark.util.CollectionAccumulator
 
-import scala.collection.mutable.BitSet
+import scala.collection.immutable.BitSet
 import scala.collection.JavaConverters._
 import scala.util.{Failure, Success, Try}
 

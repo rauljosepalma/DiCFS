@@ -1,6 +1,6 @@
 package org.apache.spark.ml.feature
 
-import scala.collection.mutable.BitSet
+import scala.collection.immutable.BitSet
 
 class FeaturesSubset(feats: BitSet, domain: BitSet) 
   extends EvaluableState[BitSet] {

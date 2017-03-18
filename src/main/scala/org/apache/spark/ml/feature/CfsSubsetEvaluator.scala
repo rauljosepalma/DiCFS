@@ -1,7 +1,7 @@
 package org.apache.spark.ml.feature
 
 import scala.math.sqrt
-import scala.collection.mutable.BitSet
+import scala.collection.immutable.BitSet
 
 // The option parameters are needed because the evaluator can run on the driver
 // or on the workers.

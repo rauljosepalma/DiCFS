@@ -4,7 +4,7 @@ import org.apache.spark.ml.linalg.Vector
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.Row
 
-import scala.collection.mutable.BitSet
+import scala.collection.immutable.BitSet
 
 class CfsFeatureSelector {
 

@@ -6,7 +6,7 @@ import org.apache.spark.sql.Row
 
 import scala.collection.mutable
 import scala.collection.immutable
-import scala.collection.mutable.BitSet
+import scala.collection.immutable.BitSet
 
 // remainingFeatsSize is used olny in the first time when precalcEntropies is
 // true and consecuently it will be equal to nFeats
