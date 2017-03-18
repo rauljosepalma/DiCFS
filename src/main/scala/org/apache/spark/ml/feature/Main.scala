@@ -14,8 +14,6 @@ import org.apache.spark.util.CollectionAccumulator
 
 import scala.collection.mutable
 import scala.collection.mutable.Buffer
-import scala.collection.immutable.IndexedSeq
-import scala.collection.immutable.BitSet
 import scala.collection.JavaConverters._
 import scala.util.{Failure, Success, Try}
 
@@ -40,23 +38,27 @@ object Main {
     // ex.: ECBDL14_train
     val dfName = args(0).split('/').last.split('.').head
     // Note that this basePath is for @master
-    val debugFileBasePath = "/root/results/" + dfName
+    val resultsPath = args(1)
+    val resultsFileBasePath = 
+      args(1).stripPrefix("resultsPath=") + dfName + "_" +
+      args.slice(2,args.size).mkString("_")
 
     // // CFS Model
 
     // // CFS Feature Selection
     // // args(0) Dataset full location
     val featureSelector = new CfsFeatureSelector
-    val feats: BitSet = 
+    val feats: Seq[Int] = 
       featureSelector.fit(
         df,
-        debugFileBasePath,
-        args(1).stripPrefix("useLocallyPred=").toBoolean,
-        args(2).stripPrefix("useGA=").toBoolean,
-        args(3).stripPrefix("useNFeatsForPopulationSize=").toBoolean,
-        args(4).stripPrefix("optIslandPopulationSize=").toInt)
+        resultsFileBasePath,
+        args(2).stripPrefix("useLocallyPred=").toBoolean,
+        args(3).stripPrefix("maxFails=").toInt,
+        args(4).stripPrefix("partitionSize=").toInt,
+        args(5).stripPrefix("restrictPartitionSizeIncrease=").toBoolean)
 
     println("SELECTED FEATS = " + feats.toString)
+
 
     // Classifier
     // args(0) _train.parquet

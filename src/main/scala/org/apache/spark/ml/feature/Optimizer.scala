@@ -15,9 +15,9 @@ abstract class StateEvaluator[T] extends Serializable {
 // Represents a state of an optimization
 abstract class EvaluableState[T] extends Serializable {
   def data: T
-  def data_= (d: T)
+  // def data_= (d: T)
   def size: Int
-  def expand: IndexedSeq[EvaluableState[T]]
+  def expand: Seq[EvaluableState[T]]
 
   override def toString(): String = data.toString
 }

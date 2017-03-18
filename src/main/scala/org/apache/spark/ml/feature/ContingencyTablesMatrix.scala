@@ -7,38 +7,53 @@ import org.apache.spark.sql.Row
 import scala.collection.mutable
 import scala.collection.immutable
 
-// nFeats parameter should include the class
-class ContingencyTablesMatrix(val nFeats: Int) extends Serializable {
-
-  val featsIndexes: immutable.Vector[(Int,Int)] = 
-    (0 until nFeats).combinations(2).toVector.map{ 
-      case immutable.Vector(i,j) => (i,j) }
+// remainingFeatsSize is used olny in the first time when precalcEntropies is
+// true and consecuently it will be equal to nFeats
+class ContingencyTablesMatrix(
+  val remainingFeatsPairs: Seq[(Int,Int)],
+  remainingFeatsSize: Int,
+  precalcEntropies: Boolean) 
+  extends Serializable {
 
   // keys for external map must meet: first <= last
   val tables:
     immutable.Map[(Int,Int), mutable.Map[(Double,Double), Int]] = {
     
-    val featsValuesMaps: immutable.Vector[mutable.Map[(Double,Double), Int]] =
-      immutable.Vector.fill(featsIndexes.size)(
+    val featsValuesMaps: IndexedSeq[mutable.Map[(Double,Double), Int]] =
+      IndexedSeq.fill(remainingFeatsPairs.size)(
         (new mutable.HashMap[(Double,Double), Int]).withDefaultValue(0))
 
-    featsIndexes.zip(featsValuesMaps).toMap
+    remainingFeatsPairs.zip(featsValuesMaps).toMap
   }
 
   // This is for preventing the driver to calculate the entropies from
   // the contingency tables directly a let the workers do part of the job
   // in the aggregate action.
-  val featsValuesCounts: immutable.Vector[mutable.Map[Double,Int]] =
-    immutable.Vector
-      .fill(nFeats)((new mutable.HashMap[Double,Int]).withDefaultValue(0))
+  val featsValuesCounts: IndexedSeq[mutable.Map[Double,Int]] = {
+    if(precalcEntropies)
+      IndexedSeq.fill(remainingFeatsSize)(
+          (new mutable.HashMap[Double,Int]).withDefaultValue(0))
+    else
+      IndexedSeq()
+  }
   
 }
 
 // An object is used for the construction outside from CfsFeatureSelector class
-// to prevent the need of Serializing the whole class
+// to prevent the need of Serializing the whole CfsFeatureSelector class
 object ContingencyTablesMatrix {
 
-  def apply(df: DataFrame, nFeats: Int): ContingencyTablesMatrix = {
+  // It is assumed that if precalcEntropies is true then remainingFeats
+  // are represented as a continous range, they also should include the class.
+  //
+  // It is possible that remainingFeatsPairs doesn't contain all the features
+  // in remainingFeats, for example when the last partition has only one
+  // element.
+  def apply(
+    df: DataFrame, 
+    remainingFeats: Seq[Int],
+    remainingFeatsPairs: Seq[(Int,Int)], 
+    precalcEntropies: Boolean): ContingencyTablesMatrix = {
 
     //DEBUG Read Matrix from disk
     // var ctmFound = false
@@ -59,44 +74,47 @@ object ContingencyTablesMatrix {
     // if(ctmFound) ( return matrix )
     // END DEBUG
 
-    def accumulator (matrix: ContingencyTablesMatrix, row: Row):
-      ContingencyTablesMatrix = {
+    def accumulator(matrix: ContingencyTablesMatrix, row: Row): ContingencyTablesMatrix = {
 
-      val features = row(0).asInstanceOf[Vector]
-      val label = row(1).asInstanceOf[Integer].toDouble
+      // TODO 
+      val label = row(1).asInstanceOf[Int].toDouble
+      // val label = row(1).asInstanceOf[Double]
+      // Select only features included in partition. Label is the last feat
+      val features = row(0).asInstanceOf[Vector].toArray :+ label
 
       // Accumulate featsValuesCounts for entropy calculation
-      (0 until matrix.nFeats-1).foreach{ iFeat => 
-        matrix.featsValuesCounts(iFeat)(features(iFeat)) += 1 }
-      matrix.featsValuesCounts(matrix.nFeats - 1)(label) += 1 
+      if(precalcEntropies) {
+        (0 until remainingFeats.size).foreach{ iFeat => 
+          matrix.featsValuesCounts(iFeat)(features(iFeat)) += 1 }
+      }
 
       // Accumulate contingency tables counts
       // Entry for (features(i),features(j)) is different that for 
       // (features(j),features(i)) (order is important)
-      matrix.featsIndexes.foreach{ case (i,j) => 
-        matrix.tables((i,j))(
-          if (i == matrix.nFeats-1) label else features(i),
-          if (j == matrix.nFeats-1) label else features(j)) += 1
+      matrix.remainingFeatsPairs.foreach{ case (i,j) => 
+        matrix.tables((i,j))(features(i),features(j)) += 1
       }
 
       matrix
     }
 
-    def merger (
+    def merger(
       matrixA: ContingencyTablesMatrix, matrixB: ContingencyTablesMatrix):
       ContingencyTablesMatrix = {
 
       // Update matrixA contingency tables
-      matrixB.featsIndexes.foreach{ featsIndex => 
+      matrixB.remainingFeatsPairs.foreach{ featsIndex => 
         matrixB.tables(featsIndex).foreach{ case (featsValues, count) =>
           matrixA.tables(featsIndex)(featsValues) += count
         }
       }
       
-      // Update matrixA featsValuesCounts for entropy calculation
-      (0 until matrixB.nFeats).foreach{ iFeat =>
-        matrixB.featsValuesCounts(iFeat).foreach{ case (featValue, count) =>
-          matrixA.featsValuesCounts(iFeat)(featValue) += count
+      if(precalcEntropies){
+        // Update matrixA featsValuesCounts for entropy calculation
+        (0 until remainingFeats.size).foreach{ iFeat =>
+          matrixB.featsValuesCounts(iFeat).foreach{ case (featValue, count) =>
+            matrixA.featsValuesCounts(iFeat)(featValue) += count
+          }
         }
       }
 
@@ -104,9 +122,13 @@ object ContingencyTablesMatrix {
 
     }
 
+    val ctm = new ContingencyTablesMatrix(
+      remainingFeatsPairs,
+      remainingFeats.size,
+      precalcEntropies)
+
     // The hard work is done in the following line
-    var tmpmatrix = df.rdd.aggregate(
-      new ContingencyTablesMatrix(nFeats))(accumulator, merger)
+    var tmpmatrix = df.rdd.aggregate(ctm)(accumulator, merger)
 
     // DEBUG save matrix to disk
     // val oos = 

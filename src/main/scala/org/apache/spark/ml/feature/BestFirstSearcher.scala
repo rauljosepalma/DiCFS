@@ -31,7 +31,7 @@ class BestFirstSearcher[T](
     // A collection of evaluated search states
     // DEBUG
     // println("HEAD:" + head.toString)
-    val newStates: IndexedSeq[EvaluatedState[T]] = 
+    val newStates: Seq[EvaluatedState[T]] = 
       (head
         .state
         .expand
@@ -77,7 +77,7 @@ class BestFirstSearchList[T](capacity: Int) {
         return this
       }
     
-      // Add the element preserbing the order
+      // Add the element preserving the order
       val index = data.lastIndexWhere((s) => s.merit >= ne.merit)
       // If the new element should go last, replace the last
       if (index == data.size - 1) {
@@ -94,12 +94,13 @@ class BestFirstSearchList[T](capacity: Int) {
       data.insert(index + 1, ne)
     }
 
-    println(this.toString)
+    // DEBUG
+    // println(this.toString)
 
     return this
   }
 
-  def ++=(nes: TraversableOnce[EvaluatedState[T]]): Unit = {
+  def ++=(nes: Seq[EvaluatedState[T]]): Unit = {
     nes.foreach{ ne => this += ne }
   }
 
