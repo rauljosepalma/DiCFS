@@ -78,8 +78,8 @@ object ContingencyTablesMatrix {
     def accumulator(matrix: ContingencyTablesMatrix, row: Row): ContingencyTablesMatrix = {
 
       // TODO 
-      val label = row(1).asInstanceOf[Int].toDouble
-      // val label = row(1).asInstanceOf[Double]
+      // val label = row(1).asInstanceOf[Int].toDouble
+      val label = row(1).asInstanceOf[Double]
       // Select only features included in partition. Label is the last feat
       val features = row(0).asInstanceOf[Vector].toArray :+ label
 

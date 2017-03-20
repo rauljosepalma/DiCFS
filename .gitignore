@@ -23,3 +23,6 @@ project/plugins/project/
 # Sublime Text
 *.sublime-project
 *.sublime-workspace
+
+# Project specific
+src/scripts/

@@ -28,8 +28,13 @@ class CorrelationsMatrix {
   def isEmpty: Boolean = data.isEmpty
 
   override def toString(): String =  {
-    data.keysIterator.toSeq.sorted
+    this.keys.sorted
       .map{ pair => s"$pair = ${data(pair)}" }.mkString("\n")
+  }
+
+  // TODO TEMP
+  def toStringCorrsWithClass(iClass: Int): String = {
+    (0 until iClass).map( i=> s"${data((i, iClass))}" ).mkString(",")
   } 
  
 }

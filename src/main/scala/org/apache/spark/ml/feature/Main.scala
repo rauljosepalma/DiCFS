@@ -41,6 +41,7 @@ object Main {
     val resultsFileBasePath = 
       args(1).stripPrefix("resultsPath=") + dfName + "_" +
       args.slice(2,args.size).mkString("_")
+    val sampleSize = args(1).stripPrefix("sampleSize=").toDouble
 
     // // CFS Model
 
@@ -49,13 +50,14 @@ object Main {
     val featureSelector = new CfsFeatureSelector
     val feats: BitSet = 
       featureSelector.fit(
-        df,
+        df.sample(withReplacement=false, fraction=sampleSize),
         resultsFileBasePath,
-        args(2).stripPrefix("useLocallyPred=").toBoolean,
-        args(3).stripPrefix("maxFails=").toInt,
-        args(4).stripPrefix("partitionSize=").toInt,
-        args(5).stripPrefix("restrictPartitionSizeIncrease=").toBoolean)
+        args(3).stripPrefix("useLocallyPred=").toBoolean,
+        args(4).stripPrefix("maxFails=").toInt,
+        args(5).stripPrefix("partitionSize=").toInt,
+        args(6).stripPrefix("restrictPartitionSizeIncrease=").toBoolean)
 
+    // DEBUG
     println("SELECTED FEATS = " + feats.toString)
 
 

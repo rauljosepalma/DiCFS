@@ -58,8 +58,8 @@ class CfsFeatureSelector {
       }.map{ p =>  BitSet(p.map(remainingFeats.toSeq):_*) }
 
       // DEBUG
-      println("partitions:")
-      println(partitions.mkString("\n"))
+      // println("partitions:")
+      // println(partitions.mkString("\n"))
 
       // Feats pairs whose correlations have not been evaluated, 
       // Its important to keep (i,j), where i < j
@@ -77,10 +77,10 @@ class CfsFeatureSelector {
         }
 
       // DEBUG
-      println("remainingFeats:")
-      println(remainingFeats.mkString(" "))
-      println("remainingFeatsPairs:")
-      println(remainingFeatsPairs.mkString(" "))
+      // println("remainingFeats:")
+      // println(remainingFeats.mkString(" "))
+      // println("remainingFeatsPairs:")
+      // println(remainingFeatsPairs.mkString(" "))
 
       val ctm = ContingencyTablesMatrix(
         df, 
@@ -95,7 +95,11 @@ class CfsFeatureSelector {
       correlations.update(remainingFeatsPairs, correlator)
 
       // DEBUG
-      println(correlations.toString)
+      println("Saving corrs with class:")
+      var file = new java.io.FileWriter(s"${resultsFileBasePath}_corrsWithClass.txt", true)
+      file.write(correlations.toStringCorrsWithClass(iClass))
+      file.close
+      System.exit(0)
 
       val subsetEvaluator = new CfsSubsetEvaluator(correlations, iClass)
 
@@ -122,7 +126,13 @@ class CfsFeatureSelector {
       // partition search.
       } else if(newRemainingFeats.size == remainingFeats.size) {
 
+        // DEBUG
+        println("IMPORTANT! NO SUBSET REDUCTION IN LAST STEP")
+
         if(restrictPartitionSizeIncrease) { 
+  
+          // DEBUG
+          println("RETURNING INDIVIDUAL FEATURE SUBSETS")
 
           // Add locally predictive feats if requested
           if (!addLocalFeats)
@@ -131,6 +141,10 @@ class CfsFeatureSelector {
             addLocallyPredictiveFeats(newRemainingFeats, correlations, iClass)
           
         } else {
+          
+          // DEBUG
+          println("FORCING SINGLE PARTITION EVALUATION")
+
           findSubset(newRemainingFeats,
             correlator.entropies, correlations, forceSinglePartition=true)
         }
@@ -140,10 +154,19 @@ class CfsFeatureSelector {
       }
     }
 
-    findSubset(
+    val tempsubset = findSubset(
       remainingFeats = BitSet(Range(0, nFeats):_*), 
       entropies = IndexedSeq(),
       correlations = new CorrelationsMatrix)
+
+
+    // DEBUG
+    var file = new java.io.FileWriter(
+      s"${resultsFileBasePath}_selectedFeats.txt", true)
+    file.write(tempsubset.mkString(","))
+    file.close
+
+    tempsubset
 
   }
 
