@@ -75,6 +75,7 @@ object ContingencyTablesMatrix {
     // if(ctmFound) ( return matrix )
     // END DEBUG
 
+
     def accumulator(matrix: ContingencyTablesMatrix, row: Row): ContingencyTablesMatrix = {
 
       // TODO 
@@ -128,8 +129,15 @@ object ContingencyTablesMatrix {
       remainingFeats.size,
       precalcEntropies)
 
-    // The hard work is done in the following line
-    var tmpmatrix = df.rdd.aggregate(ctm)(accumulator, merger)
+    // If there are no remainingFeatsPairs or we're not calculating
+    // entropies there's no need to aggregate the dataset for doing nothing.
+    val tmpmatrix = 
+      if(!remainingFeatsPairs.isEmpty){
+        // The hard work is done in the following line
+        df.rdd.aggregate(ctm)(accumulator, merger)
+      } else {
+        ctm
+      }
 
     // DEBUG save matrix to disk
     // val oos = 

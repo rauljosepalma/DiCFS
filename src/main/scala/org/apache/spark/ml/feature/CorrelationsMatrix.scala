@@ -2,8 +2,10 @@ package org.apache.spark.ml.feature
 
 import scala.math.round
 import scala.collection.mutable.HashMap
+import scala.collection.immutable.BitSet
 
-class CorrelationsMatrix {
+// nFeats includes class
+class CorrelationsMatrix(val nFeats: Int) {
 
   val data = HashMap.empty[(Int,Int), Double]
 
@@ -23,6 +25,14 @@ class CorrelationsMatrix {
     }
   }
 
+  // Clean corrs not in remainingFeats except corrs with class
+  def clean(remainingFeats: BitSet) = {
+    data.retain{ case ((iFeatA: Int, iFeatB: Int), _) =>
+      ((remainingFeats.contains(iFeatA) && remainingFeats.contains(iFeatB)) 
+        || iFeatB == nFeats)
+    } 
+  }
+
   def keys: Seq[(Int, Int)] = data.keysIterator.toSeq
 
   def isEmpty: Boolean = data.isEmpty
@@ -33,8 +43,8 @@ class CorrelationsMatrix {
   }
 
   // TODO TEMP
-  def toStringCorrsWithClass(iClass: Int): String = {
-    (0 until iClass).map( i=> s"${data((i, iClass))}" ).mkString(",")
+  def toStringCorrsWithClass: String = {
+    (0 until nFeats).map( i=> s"${data((i, nFeats))}" ).mkString(",")
   } 
  
 }

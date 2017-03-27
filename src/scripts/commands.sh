@@ -3,7 +3,7 @@
 
 # Local
 
-spark-submit --master local[*] --class org.apache.spark.ml.feature.Main /home/raul/Desktop/SparkCFS/target/scala-2.11/spark-cfs-assembly-0.1.0-SNAPSHOT.jar  /home/raul/Datasets/Large/ECBDL14/head1000-weka-discrete.arff "resultsPath=/home/raul/Desktop/PhD/Papers/2017 - DiCFS/results/" sampleSize=1.0 useLocallyPred=false maxFails=5 partitionSize=30 restrictPartitionSizeIncrease=false &> /home/raul/Desktop/SparkCFS/src/test/spark.log
+spark-submit --master local[*] --class org.apache.spark.ml.feature.Main /home/raul/Desktop/SparkCFS/target/scala-2.11/spark-cfs-assembly-0.1.0-SNAPSHOT.jar  /home/raul/Datasets/Large/ECBDL14/head1000-weka-discrete.arff "resultsPath=/home/raul/Desktop/PhD/Papers/DiCFS/results/" sampleSize=1.0 useLocallyPred=false maxFails=5 initialPartitionSize=5 &> /home/raul/Desktop/SparkCFS/src/test/spark.log
 
 # History
 spark-submit --master local[*] --class org.apache.spark.ml.feature.Main --packages sramirez:spark-MDLP-discretization:1.2.1 /home/raul/Desktop/SparkCFS/target/scala-2.10/spark-cfs_2.10-0.1.0-SNAPSHOT.jar  "/home/raul/Datasets/Large/ECBDL14/head1000_train.parquet" &> /home/raul/Desktop/SparkCFS/src/test/spark.log
@@ -40,13 +40,16 @@ scp /home/raul/Desktop/SparkCFS/src/scripts/cluster-todo.sh root@master:/root/cl
 scp -r /home/raul/.ivy2/local/*** root@master:/root/.ivy2/local/
 
 # Get results
-scp root@master:/root/results/ECBDL14/** "/home/raul/Desktop/PhD/Papers/2017 - DiCFS/results/"
-scp root@master:/root/nohup.out "/home/raul/Desktop/PhD/Papers/2017 - DiCFS/results/"
+scp root@master:/root/results/** "/home/raul/Desktop/PhD/Papers/DiCFS/results/"
+scp root@master:/root/nohup.out "/home/raul/Desktop/PhD/Papers/DiCFS/results/"
 
 # Execute work
 { rm -f nohup.out ; nohup ./cluster-todo.sh & }
 rm -f nohup.out
 nohup ./cluster-todo.sh &
+# Stop work
+ps -ef | grep cluster-todo
+kill <pid>
 
 { sleep 5h ; nohup ./cluster-todo-next.sh ; } &
 

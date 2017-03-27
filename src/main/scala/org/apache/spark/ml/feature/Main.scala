@@ -30,8 +30,10 @@ object Main {
     
     // Reduce verbosity
     sc.setLogLevel("WARN")
-    
+
+    import org.apache.spark.storage.StorageLevel    
     val df = DataFrameIO.readDFFromAny(args(0))
+    // val df = DataFrameIO.readDFFromAny(args(0)).persist(StorageLevel.MEMORY_ONLY)
     // ex.: hdfs://master:8020/datasets
     val dfPath = args(0).slice(0, args(0).lastIndexOf("/"))
     // ex.: ECBDL14_train
@@ -41,7 +43,7 @@ object Main {
     val resultsFileBasePath = 
       args(1).stripPrefix("resultsPath=") + dfName + "_" +
       args.slice(2,args.size).mkString("_")
-    val sampleSize = args(1).stripPrefix("sampleSize=").toDouble
+    val sampleSize = args(2).stripPrefix("sampleSize=").toDouble
 
     // // CFS Model
 
@@ -54,8 +56,7 @@ object Main {
         resultsFileBasePath,
         args(3).stripPrefix("useLocallyPred=").toBoolean,
         args(4).stripPrefix("maxFails=").toInt,
-        args(5).stripPrefix("partitionSize=").toInt,
-        args(6).stripPrefix("restrictPartitionSizeIncrease=").toBoolean)
+        args(5).stripPrefix("initialPartitionSize=").toInt)
 
     // DEBUG
     println("SELECTED FEATS = " + feats.toString)
