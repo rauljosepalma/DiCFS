@@ -10,8 +10,7 @@ abstract class Correlator(val sameFeatureValue: Double) {
 
 
 class SymmetricUncertaintyCorrelator(
-  ctm: ContingencyTablesMatrix, nInstances: Long,
-  previousEntropies: IndexedSeq[Double], iClass: Int) 
+  var ctm: ContingencyTablesMatrix, nInstances: Long, iClass: Int) 
   extends Correlator(sameFeatureValue=1.0) with Serializable {
 
   // The smallest deviation allowed in double comparisons. (from WEKA)
@@ -20,20 +19,18 @@ class SymmetricUncertaintyCorrelator(
   // Entropies are frequently needed by the method correlate,
   // so they are calculated and cached
   val entropies: IndexedSeq[Double] = 
-    if(previousEntropies.isEmpty)
-      ctm.featsValuesCounts.map{ valuesCounts: mutable.Map[Double, Int] =>
-        (valuesCounts
-          .map{ case (_, count) => count * log(count) }
-          // Using nInstances assumes that there are no missing values
-          .sum * (-1.0/nInstances) + log(nInstances)
-        )
-      }
-    else
-      previousEntropies
+    ctm.featsValuesCounts.map{ valuesCounts: mutable.Map[Double, Int] =>
+      (valuesCounts
+        .map{ case (_, count) => count * log(count) }
+        // Using nInstances assumes that there are no missing values
+        .sum * (-1.0/nInstances) + log(nInstances)
+      )
+    }
 
   //DEBUG
   // println("ENTROPIES=")
   // entropies.foreach(println)
+
 
   // Since conditionalEntropies should be asked once, they are not stored to
   // prevent reserving memory that will be needed for the correlations matrix.
@@ -48,6 +45,9 @@ class SymmetricUncertaintyCorrelator(
   private def approxEq(a: Double, b: Double): Boolean = {
     ((a == b) || ((a - b < SMALL) && (b - a < SMALL)))
   }
+  
+  // def updateContingencyTablesMatrix(ctm: ContingencyTablesMatrix) = 
+  //   this.ctm = ctm
 
   override def correlate(iFeatA: Int, iFeatB: Int): Double = {
     // This to alert conditionalEntropies being calculated unnecessarly i.e.

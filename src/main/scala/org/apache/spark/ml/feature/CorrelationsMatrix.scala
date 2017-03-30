@@ -21,14 +21,19 @@ class CorrelationsMatrix(val nFeats: Int) {
   // Add new correlations to matrix
   def update(newFeatsPairs: Seq[(Int,Int)], correlator: Correlator) = {
     newFeatsPairs.foreach{ case(i,j) => 
+      require(i < j, "In a featPair(i,j) i must always be less than j")
+
       data((i,j)) = correlator.correlate(i,j)
     }
   }
 
   // Clean corrs not in remainingFeats except corrs with class
-  def clean(remainingFeats: BitSet) = {
+  def clean(remainingFeats: Seq[Int]) = {
+
+    val remainingFeatsSet = BitSet(remainingFeats:_*)
     data.retain{ case ((iFeatA: Int, iFeatB: Int), _) =>
-      ((remainingFeats.contains(iFeatA) && remainingFeats.contains(iFeatB)) 
+      ((remainingFeatsSet.contains(iFeatA) && 
+        remainingFeatsSet.contains(iFeatB)) 
         || iFeatB == nFeats)
     } 
   }

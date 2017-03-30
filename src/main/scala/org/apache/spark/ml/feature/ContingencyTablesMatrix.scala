@@ -8,11 +8,9 @@ import scala.collection.mutable
 import scala.collection.immutable
 import scala.collection.immutable.BitSet
 
-// remainingFeatsSize is used olny in the first time when precalcEntropies is
-// true and consecuently it will be equal to nFeats
 class ContingencyTablesMatrix(
   val remainingFeatsPairs: Seq[(Int,Int)],
-  remainingFeatsSize: Int,
+  nFeats: Int,
   precalcEntropies: Boolean) 
   extends Serializable {
 
@@ -32,7 +30,7 @@ class ContingencyTablesMatrix(
   // in the aggregate action.
   val featsValuesCounts: IndexedSeq[mutable.Map[Double,Int]] = {
     if(precalcEntropies)
-      IndexedSeq.fill(remainingFeatsSize)(
+      IndexedSeq.fill(nFeats)(
           (new mutable.HashMap[Double,Int]).withDefaultValue(0))
     else
       IndexedSeq()
@@ -44,17 +42,17 @@ class ContingencyTablesMatrix(
 // to prevent the need of Serializing the whole CfsFeatureSelector class
 object ContingencyTablesMatrix {
 
-  // It is assumed that if precalcEntropies is true then remainingFeats
-  // are represented as a continous range, they also should include the class.
-  //
+  // nFeats (must include the class) is needed only when precalcEntropies is
+  // true.
+
   // It is possible that remainingFeatsPairs doesn't contain all the features
   // in remainingFeats, for example when the last partition has only one
   // element.
   def apply(
     df: DataFrame, 
-    remainingFeats: BitSet,
     remainingFeatsPairs: Seq[(Int,Int)], 
-    precalcEntropies: Boolean): ContingencyTablesMatrix = {
+    nFeats: Int=0,
+    precalcEntropies: Boolean=false): ContingencyTablesMatrix = {
 
     //DEBUG Read Matrix from disk
     // var ctmFound = false
@@ -86,7 +84,7 @@ object ContingencyTablesMatrix {
 
       // Accumulate featsValuesCounts for entropy calculation
       if(precalcEntropies) {
-        (0 until remainingFeats.size).foreach{ iFeat => 
+        (0 until nFeats).foreach{ iFeat => 
           matrix.featsValuesCounts(iFeat)(features(iFeat)) += 1 }
       }
 
@@ -113,7 +111,7 @@ object ContingencyTablesMatrix {
       
       if(precalcEntropies){
         // Update matrixA featsValuesCounts for entropy calculation
-        (0 until remainingFeats.size).foreach{ iFeat =>
+        (0 until nFeats).foreach{ iFeat =>
           matrixB.featsValuesCounts(iFeat).foreach{ case (featValue, count) =>
             matrixA.featsValuesCounts(iFeat)(featValue) += count
           }
@@ -126,7 +124,7 @@ object ContingencyTablesMatrix {
 
     val ctm = new ContingencyTablesMatrix(
       remainingFeatsPairs,
-      remainingFeats.size,
+      nFeats,
       precalcEntropies)
 
     // If there are no remainingFeatsPairs or we're not calculating

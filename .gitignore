@@ -25,4 +25,4 @@ project/plugins/project/
 *.sublime-workspace
 
 # Project specific
-src/scripts/
+src/scripts/*

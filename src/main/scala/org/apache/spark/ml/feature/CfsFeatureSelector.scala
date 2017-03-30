@@ -28,64 +28,41 @@ class CfsFeatureSelector {
     require(initialPartitionSize == nFeats || initialPartitionSize <= nFeats/2,
       "Partition size must be less than or equal to half size of the total number of feats or it must be equal to it")
 
+    // Calculate corrs with class for sorting
+    val remainingFeatsPairs = Range(0, nFeats).zip(Vector.fill(nFeats)(iClass))
+    val ctm = ContingencyTablesMatrix(
+      df, 
+      remainingFeatsPairs,
+      nFeats + 1, // nFeats must include the class
+      precalcEntropies=true)
+    val correlator = new SymmetricUncertaintyCorrelator(
+      ctm, nInstances, iClass)
+    val correlations = new CorrelationsMatrix(nFeats)
+    // Update correlations matrix (with corrs with class)
+    correlations.update(remainingFeatsPairs, correlator)
+    // Sort remainingFeats by their corr with class (from max to min)
+    val remainingFeats = Range(0, nFeats).sorted(
+      Ordering.by[Int, Double]( iFeat => correlations(iFeat, iClass) * -1.0))
+
+    // DEBUG
+    var file = new java.io.FileWriter(s"${resultsFileBasePath}_corrsWithClass.txt", true)
+    file.write(correlations.toStringCorrsWithClass(iClass))
+    file.close
+
+
     // remainingFeats are not necessarly in order (140,141,142, etc)
     def findSubset(
       currentPartitionSize: Int,
-      remainingFeats: BitSet, 
-      entropies: IndexedSeq[Double],
+      remainingFeats: Seq[Int], 
       correlations: CorrelationsMatrix,
+      correlator: SymmetricUncertaintyCorrelator,
       initialFeatsPairsCount: Int=0): BitSet = {
 
-      // The first time this function is called correlations matrix is empty
-      val isFirstTime = correlations.isEmpty
-
-      // Clean unneeded correlations (keep corrs with class)
-      if (!isFirstTime) correlations.clean(remainingFeats)
-
-      // Try to increase the partition size so the number of pair correlations
-      // calculated is the maximum allowed by the initialPartitionSize
-      val adjustedPartitionSize = {
-        if (isFirstTime) initialPartitionSize
-        else getAdjustedPartitionSize(
-          initialFeatsPairsCount,
+      val (partitions: Seq[Seq[Int]], remainingFeatsPairs: Seq[(Int,Int)]) = 
+        getPartitionsAndRemainingFeatsPairs(
           currentPartitionSize,
           remainingFeats,
           correlations)
-      }
-
-      val (partitions: Seq[BitSet], remainingFeatsPairs: Seq[(Int,Int)]) = 
-        getPartitionsAndRemainingFeatsPairs(
-          adjustedPartitionSize,
-          remainingFeats,
-          correlations)
-
-      val newInitialFeatsPairsCount = 
-        if (isFirstTime) remainingFeatsPairs.size else initialFeatsPairsCount
-
-      // DEBUG
-      println(s"PARTITION SIZE=$adjustedPartitionSize")
-      println(s"ABOUT TO PROCESS ${remainingFeatsPairs.size} FEATS PAIRS...")
-
-      // DEBUG TEST
-      val pairsCount = countRemainingFeatsPairs(
-        adjustedPartitionSize,
-        remainingFeats,
-        correlations)
-
-      require(pairsCount == remainingFeatsPairs.size, 
-        s"ERROR: pairsCount != remainingFeatsPairs.size ($pairsCount != ${remainingFeatsPairs.size})")
-
-      val ctm = ContingencyTablesMatrix(
-        df, 
-        if (isFirstTime) remainingFeats + iClass else remainingFeats,
-        remainingFeatsPairs,
-        precalcEntropies=isFirstTime)
-
-      val correlator = new SymmetricUncertaintyCorrelator(
-        ctm, nInstances, entropies, iClass)
-
-      // Update correlations matrix
-      correlations.update(remainingFeatsPairs, correlator)
 
       // DEBUG
       // println("partitions:")
@@ -94,54 +71,81 @@ class CfsFeatureSelector {
       // println(remainingFeats.mkString(" "))
       // println("remainingFeatsPairs:")
       // println(remainingFeatsPairs.mkString(" "))
-      if(isFirstTime){
-        println("Saving corrs with class...")
-        var file = new java.io.FileWriter(s"${resultsFileBasePath}_corrsWithClass.txt", true)
-        file.write(correlations.toStringCorrsWithClass(iClass))
-        file.close
-      }
+      println(s"PARTITION SIZE = $currentPartitionSize")
+      println(s"ABOUT TO PROCESS ${remainingFeatsPairs.size} FEATS PAIRS...")
+      // DEBUG TEST
+      val pairsCount = countRemainingFeatsPairs(
+        currentPartitionSize,
+        remainingFeats,
+        correlations)
+      require(pairsCount == remainingFeatsPairs.size, 
+        s"ERROR: pairsCount != remainingFeatsPairs.size ($pairsCount != ${remainingFeatsPairs.size})")
+      // END-DEBUG
 
+      // The hard-work
+      val newCtm = ContingencyTablesMatrix(df, remainingFeatsPairs)
+      
+      correlator.ctm = newCtm
+      // Update correlations matrix
+      correlations.update(remainingFeatsPairs, correlator)
+      // Create a new evaluator (just to skip passing it as param)
       val subsetEvaluator = new CfsSubsetEvaluator(correlations, iClass)
+      // Search subsets on each partition, merge (and sort) results.
+      val newRemainingFeats: Seq[Int] = 
+        findAndMergeSubsetsInPartitions(
+          partitions, correlations, subsetEvaluator, maxFails)
 
-      // Search subsets on each partition, merge results.
-      val newRemainingFeats: BitSet = 
-        findAndMergeSubsetsInPartitions(partitions, subsetEvaluator, maxFails)
+      // Clean unneeded correlations (keep corrs with class)
+      correlations.clean(newRemainingFeats)
 
       //DEBUG
-      println("NUMBER OF EVALUATIONS=" + subsetEvaluator.numOfEvaluations)
-      println("BEST SUBSET=" + newRemainingFeats.toString)
-      println("BEST SUBSET SIZE=" + newRemainingFeats.size.toString)
-  
+      println(s"NUMBER OF EVALUATIONS = ${subsetEvaluator.numOfEvaluations}")
+      println(s"BEST SUBSET =  ${newRemainingFeats.toString} SIZE = ${newRemainingFeats.size}")
+
       // End when the features where not partitioned
       // Observe the adjustedPartitionSize warranties that the single partition
       // case will be always reached 
-      if(partitions.size == 1){
+      if(partitions.size != 1){
 
-        // Add locally predictive feats if requested
-        if (!addLocalFeats)
-          newRemainingFeats
-        else 
-          addLocallyPredictiveFeats(newRemainingFeats, correlations, iClass)
+        // Try to increase the partition size so the number of pair
+        // correlations calculated is the maximum allowed by the
+        // initialPartitionSize
+        val checkedInitialFeatsPairsCount = 
+          if (initialFeatsPairsCount == 0) remainingFeatsPairs.size 
+          else initialFeatsPairsCount
+        val adjustedPartitionSize = 
+          getAdjustedPartitionSize(
+            initialFeatsPairsCount = checkedInitialFeatsPairsCount,
+            currentPartitionSize,
+            newRemainingFeats,
+            correlations)
 
-      } else {
         findSubset(
           adjustedPartitionSize, 
           newRemainingFeats, 
-          correlator.entropies, 
           correlations,
-          newInitialFeatsPairsCount)
+          correlator, 
+          checkedInitialFeatsPairsCount)
+
+      } else {
+
+        val newRemainingFeatsSet = BitSet(newRemainingFeats:_*)
+
+        // Add locally predictive feats if requested
+        if (!addLocalFeats)
+          newRemainingFeatsSet
+        else 
+          addLocallyPredictiveFeats(newRemainingFeatsSet, correlations, iClass)
+
       }
     }
 
     // DEBUG tempsubset
     val tempsubset = findSubset(
-      currentPartitionSize = initialPartitionSize,
-      remainingFeats = BitSet(Range(0, nFeats):_*), 
-      entropies = IndexedSeq(),
-      correlations = new CorrelationsMatrix(nFeats))
+      initialPartitionSize, remainingFeats, correlations, correlator)
 
     // DEBUG
-    var file = new java.io.FileWriter(
+    file = new java.io.FileWriter(
       s"${resultsFileBasePath}_selectedFeats.txt", true)
     file.write(tempsubset.mkString(","))
     file.close
@@ -153,10 +157,8 @@ class CfsFeatureSelector {
 
   private def getPartitionsAndRemainingFeatsPairs(
     partitionSize: Int, 
-    remainingFeats: BitSet,
-    correlations: CorrelationsMatrix): (Seq[BitSet], Seq[(Int,Int)]) = {
-
-    val isFirstTime = correlations.isEmpty
+    remainingFeats: Seq[Int],
+    correlations: CorrelationsMatrix): (Seq[Seq[Int]], Seq[(Int,Int)]) = {
 
     // If remaningFeats.size < partitionSize then nPartitions == 1
     val nPartitions: Int = {
@@ -167,36 +169,24 @@ class CfsFeatureSelector {
 
     // Sequential splits of partitionSize from features Ex.: If
     // remainingFeats.size = 5, 2 size splits are: [[0,1],[2,3],[4]]
-    val partitions: Seq[BitSet] = {
+    val partitions: Seq[Seq[Int]] = {
       (0 until nPartitions - 1).map{ i => 
-        Range(i * partitionSize, (i+1) * partitionSize)
+        Range(i * partitionSize, (i+1) * partitionSize).map(remainingFeats)
       } :+ 
       Range((nPartitions-1) * partitionSize, remainingFeats.size)
-    // Partitions indexes must be mapped to the remainingFeats
-    }.map{ p =>  BitSet(p.map(remainingFeats.toSeq):_*) }
+        .map(remainingFeats)
+    }
 
     // Feats pairs whose correlations have not been evaluated, 
     // Its important to keep (i,j), where i < j
-    val remainingFeatsPairs: Seq[(Int,Int)] = 
-      // The first time partitions include the class and correlations
-      // matrix is empty
-      if(isFirstTime) {
-        partitions.flatMap{ p => 
-          (p + correlations.nFeats).toSeq.combinations(2).map{ 
-            pair => (pair(0), pair(1)) }
+    val remainingFeatsPairs: Seq[(Int,Int)] = {
+      partitions
+        .flatMap( _.combinations(2) )
+        .map{ pair => 
+          if (pair(0) < pair(1)) (pair(0),pair(1)) else (pair(1),pair(0)) 
         }
-      } else { 
-        partitions
-          .flatMap( _.toSeq.combinations(2) )
-          .map( pair => (pair(0),pair(1)) )
-          .diff(correlations.keys)
-      }
-      // {
-      //   partition.toSeq.combinations(2)
-      //     .filter{ pair =>
-      //       !correlations.keys.contains(pair(0), pair(1)) }
-      //     .map{ pair => (pair(0), pair(1)) }
-      // }
+        .diff(correlations.keys)
+    }
     
 
     (partitions, remainingFeatsPairs)
@@ -204,7 +194,7 @@ class CfsFeatureSelector {
 
   private def countRemainingFeatsPairs(
     partitionSize: Int, 
-    remainingFeats: BitSet,
+    remainingFeats: Seq[Int],
     correlations: CorrelationsMatrix): Int = {
 
     val (_, remainingFeatsPairs: Seq[(Int,Int)]) = 
@@ -235,7 +225,7 @@ class CfsFeatureSelector {
   private def getAdjustedPartitionSize(
     initialFeatsPairsCount: Int,
     currentPartitionSize: Int,
-    remainingFeats: BitSet,
+    remainingFeats: Seq[Int],
     correlations: CorrelationsMatrix): Int = {
 
     require(!correlations.isEmpty, 
@@ -303,15 +293,16 @@ class CfsFeatureSelector {
   // }
 
   private def findAndMergeSubsetsInPartitions(
-    partitions: Seq[BitSet], 
+    partitions: Seq[Seq[Int]], 
+    correlations: CorrelationsMatrix,
     evaluator: CfsSubsetEvaluator,
-    maxFails: Int): BitSet = {
+    maxFails: Int): Seq[Int] = {
 
     val mergedFeats: Seq[Int] = 
       partitions.flatMap{ partition => 
         val optimizer = 
           new BestFirstSearcher(
-            initialState = new FeaturesSubset(BitSet(), partition),
+            initialState = new FeaturesSubset(BitSet(), BitSet(partition:_*)),
             evaluator,
             maxFails)
         val result: EvaluatedState[BitSet] = optimizer.search
@@ -324,7 +315,10 @@ class CfsFeatureSelector {
         result.state.data
       }
 
-    BitSet(mergedFeats:_*)
+    // Due to the BitSet conversion, sorting is lost
+    mergedFeats.sorted(
+      Ordering.by[Int, Double]( 
+        iFeat => correlations(iFeat, correlations.nFeats) * -1.0))
   }
 
   private def addLocallyPredictiveFeats(
