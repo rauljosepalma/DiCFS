@@ -114,7 +114,7 @@ final class CFSSelector(override val uid: String)
       $(initPartitionSize) == nFeats || 
       $(initPartitionSize) == 0 || 
       $(initPartitionSize) <= nFeats/2,
-      "If partition size is not zero or to the total number of feats, then it must be less than or equal to half size of that total number of feats.")
+      "If partition size is not zero or equal to the total number of feats, then it must be less than or equal to half size of that total number of feats.")
 
     SchemaUtils.checkColumnType(schema, $(featuresCol), new VectorUDT)
     SchemaUtils.checkNumericType(schema, $(labelCol))
@@ -134,6 +134,7 @@ final class CFSSelector(override val uid: String)
     // By convention it is considered that class is stored after the last
     // feature in the correlations matrix
     val iClass = nFeats
+    if($(initPartitionSize) == 0) setInitPartitionSize(nFeats)
 
      // Calculate corrs with class for sorting
     val remainingFeatsPairs = Range(0, nFeats).zip(Vector.fill(nFeats)(iClass))
@@ -147,9 +148,14 @@ final class CFSSelector(override val uid: String)
     val correlations = new CorrelationsMatrix(nFeats)
     // Update correlations matrix (with corrs with class)
     correlations.update(remainingFeatsPairs, correlator)
-    // Sort remainingFeats by their corr with class (from max to min)
-    val remainingFeats = Range(0, nFeats).sorted(
-      Ordering.by[Int, Double]( iFeat => correlations(iFeat, iClass) * -1.0))
+    // Sort remainingFeats by their corr with class (from max to min) and
+    // remove feats with zero correlation
+    val remainingFeats = { Range(0, nFeats)
+      .filter(correlations(_, iClass) != 0.0)
+      .sorted(Ordering.by[Int, Double]{ iFeat => 
+        correlations(iFeat, iClass) * -1.0
+      })
+    }
 
     // DEBUG
     println(s"CORRS WITH CLASS = ${correlations.toStringCorrsWithClass}")
