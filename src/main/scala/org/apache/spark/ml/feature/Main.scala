@@ -49,17 +49,31 @@ object Main {
 
     // // CFS Feature Selection
     // // args(0) Dataset full location
-    val featureSelector = new CfsFeatureSelector
-    val feats: BitSet = 
-      featureSelector.fit(
-        df.sample(withReplacement=false, fraction=sampleSize),
-        resultsFileBasePath,
-        args(3).stripPrefix("useLocallyPred=").toBoolean,
-        args(4).stripPrefix("maxFails=").toInt,
-        args(5).stripPrefix("initialPartitionSize=").toInt)
+    val fSelector = { new CFSSelector()
+      .setFeaturesCol("features")
+      .setLabelCol("label")
+      .setOutputCol("prediction")
+      .setLocallyPredictive(args(3).stripPrefix("locallyPred=").toBoolean)
+      .setSearchTermination(args(4).stripPrefix("searchTermination=").toInt)
+      .setInitPartitionSize(args(5).stripPrefix("initPartitionSize=").toInt)
+    }
 
-    // DEBUG
-    println("SELECTED FEATS = " + feats.toString)
+    val model = 
+        fSelector.fit(df.sample(withReplacement=false, fraction=sampleSize))
+
+    println(s"SELECTED FEATS = ${model.selectedFeats.mkString(",")}")
+
+    // val feats: BitSet = 
+    //   featureSelector.fit()
+    //   featureSelector.fit(
+    //     df.sample(withReplacement=false, fraction=sampleSize),
+    //     resultsFileBasePath,
+    //     args(3).stripPrefix("useLocallyPred=").toBoolean,
+    //     args(4).stripPrefix("maxFails=").toInt,
+    //     args(5).stripPrefix("initialPartitionSize=").toInt)
+
+    // // DEBUG
+    // println("SELECTED FEATS = " + feats.toString)
 
 
     // Classifier

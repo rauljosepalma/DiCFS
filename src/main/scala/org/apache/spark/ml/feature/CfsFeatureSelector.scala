@@ -1,37 +1,144 @@
 package org.apache.spark.ml.feature
 
-import org.apache.spark.ml.linalg.Vector
-import org.apache.spark.sql.DataFrame
-import org.apache.spark.sql.Row
+import org.apache.hadoop.fs.Path
+
+import org.apache.spark.annotation.Since
+import org.apache.spark.ml._
+import org.apache.spark.ml.attribute.{AttributeGroup, _}
+import org.apache.spark.ml.linalg.{Vector, VectorUDT}
+import org.apache.spark.ml.param._
+import org.apache.spark.ml.param.shared._
+import org.apache.spark.ml.util._
+import org.apache.spark.sql._
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types.{DoubleType, StructType}
 
 import scala.collection.immutable.BitSet
 
-class CfsFeatureSelector {
+/**
+ * Params for [[CFSSelector]] and [[CFSSelectorModel]].
+ */
+private[feature] trait CFSSelectorParams extends Params
+  with HasFeaturesCol with HasOutputCol with HasLabelCol {
+  /**
+   * Whether to add or not locally predictive feats as described by: Hall, M.
+   * A. (2000). Correlation-based Feature Selection for Discrete and Numeric
+   * Class Machine Learning.
+   * The default value for locallyPredictive is true.
+   *
+   * @group param
+   */
+  final val locallyPredictive = new BooleanParam(this, "locallyPredictive",
+    "Whether to add or not locally predictive feats as described by: Hall, M. A. (2000). Correlation-based Feature Selection for Discrete and Numeric Class Machine Learning.")
+  setDefault(locallyPredictive -> true)
+
+  /** @group getParam */
+  def getLocallyPredictive: Boolean = $(locallyPredictive)
+
+  /**
+   * The initial size of the partitions. This is used in high dimensional
+   * spaces where processing all features in a single partition is untractable.
+   * Having initPartitionSize equal to zero or to the total number of
+   * features implies processing all features in a single partition as the
+   * original version of CFS does.
+   * The default value for initPartitionSize is 0.
+   *
+   * @group param
+   */
+  final val initPartitionSize = new IntParam(this, "initPartitionSize",
+    "The initial size of the partitions. This is used in high dimensional spaces where processing all features in a single partition is untractable. Having initPartitionSize equal to zero or to the total number of features implies processing all features in a single partition as the original version of CFS does. If this is not the case, then initPartitionSize must be less than or equal to half size of the total number of features in the dataset.",
+    ParamValidators.gtEq(0))
+  setDefault(initPartitionSize -> 0)
+
+  /** @group getParam */
+  def getInitialPartitionSize: Int = $(initPartitionSize)
+
+  /**
+   * The number of consecutive non-improving nodes to allow before terminating
+   * the search (best first). 
+   * The default value for searchTermination is 5.
+   *
+   * @group param
+   */
+  final val searchTermination = new IntParam(this, "searchTermination",
+    "The number of consecutive non-improving nodes to allow before terminating the search (best first)",
+    ParamValidators.gtEq(1))
+  setDefault(searchTermination -> 5)
+
+  /** @group getParam */
+  def getSearchTermination: Int = $(searchTermination)
+
+
+}
+
+
+final class CFSSelector(override val uid: String)
+  extends Estimator[CFSSelectorModel] 
+  with CFSSelectorParams with DefaultParamsWritable {
+
+  def this() = this(Identifiable.randomUID("cfsSelector"))
+
+  /** @group setParam */
+  def setInitPartitionSize(value: Int): this.type = set(initPartitionSize, value)
+
+  /** @group setParam */
+  def setSearchTermination(value: Int): this.type = set(searchTermination, value)
+
+  /** @group setParam */
+  def setLocallyPredictive(value: Boolean): this.type = set(locallyPredictive, value)
+
+  /** @group setParam */
+  def setFeaturesCol(value: String): this.type = set(featuresCol, value)
+
+  /** @group setParam */
+  def setOutputCol(value: String): this.type = set(outputCol, value)
+
+  /** @group setParam */
+  def setLabelCol(value: String): this.type = set(labelCol, value)
+
+  override def fit(dataset: Dataset[_]): CFSSelectorModel = {
+    transformSchema(dataset.schema, logging = true)
+
+    val selectedFeats: BitSet = doFit(dataset)
+
+    copyValues(new CFSSelectorModel(uid, selectedFeats.toArray).setParent(this)) 
+  }
+
+  override def transformSchema(schema: StructType): StructType = {
+
+    val nFeats = 
+      AttributeGroup.fromStructField(schema($(featuresCol))).size 
+
+    // TODO DEBUG
+    require(
+      $(initPartitionSize) == nFeats || 
+      $(initPartitionSize) == 0 || 
+      $(initPartitionSize) <= nFeats/2,
+      "If partition size is not zero or to the total number of feats, then it must be less than or equal to half size of that total number of feats.")
+
+    SchemaUtils.checkColumnType(schema, $(featuresCol), new VectorUDT)
+    SchemaUtils.checkNumericType(schema, $(labelCol))
+    SchemaUtils.appendColumn(schema, $(outputCol), new VectorUDT)
+  }
+
+  override def copy(extra: ParamMap): CFSSelector = defaultCopy(extra)
 
   // Searches a subset of features given the data
-  // Returns a BitSet containing the selected features
-  // df DataFrame must be discretized
-  // If initialPartitionSize == nFeats in df, then no partitioning is perfomed
-  def fit(
-    df: DataFrame,
-    resultsFileBasePath: String,
-    addLocalFeats: Boolean, 
-    maxFails: Int,
-    initialPartitionSize: Int): BitSet = {
+  // dataset DataFrame must be discretized
+  // If $(initPartitionSize) == nFeats in dataset, then no partitioning is perfomed
+  private def doFit(dataset: Dataset[_]): BitSet = {
 
-    val nFeats = df.take(1)(0)(0).asInstanceOf[Vector].size
-    val nInstances: Long = df.count
+    // TODO DEBUG
+    val nFeats = AttributeGroup.fromStructField(dataset.schema($(featuresCol))).size 
+    val nInstances: Long = dataset.count
     // By convention it is considered that class is stored after the last
     // feature in the correlations matrix
     val iClass = nFeats
 
-    require(initialPartitionSize == nFeats || initialPartitionSize <= nFeats/2,
-      "Partition size must be less than or equal to half size of the total number of feats or it must be equal to it")
-
-    // Calculate corrs with class for sorting
+     // Calculate corrs with class for sorting
     val remainingFeatsPairs = Range(0, nFeats).zip(Vector.fill(nFeats)(iClass))
     val ctm = ContingencyTablesMatrix(
-      df, 
+      dsToDF(dataset), 
       remainingFeatsPairs,
       nFeats + 1, // nFeats must include the class
       precalcEntropies=true)
@@ -45,12 +152,8 @@ class CfsFeatureSelector {
       Ordering.by[Int, Double]( iFeat => correlations(iFeat, iClass) * -1.0))
 
     // DEBUG
-    var file = new java.io.FileWriter(s"${resultsFileBasePath}_corrsWithClass.txt", true)
-    file.write(correlations.toStringCorrsWithClass(iClass))
-    file.close
+    println(s"CORRS WITH CLASS = ${correlations.toStringCorrsWithClass}")
 
-
-    // remainingFeats are not necessarly in order (140,141,142, etc)
     def findSubset(
       currentPartitionSize: Int,
       remainingFeats: Seq[Int], 
@@ -83,7 +186,7 @@ class CfsFeatureSelector {
       // END-DEBUG
 
       // The hard-work
-      val newCtm = ContingencyTablesMatrix(df, remainingFeatsPairs)
+      val newCtm = ContingencyTablesMatrix(dsToDF(dataset), remainingFeatsPairs)
       
       correlator.ctm = newCtm
       // Update correlations matrix
@@ -93,7 +196,7 @@ class CfsFeatureSelector {
       // Search subsets on each partition, merge (and sort) results.
       val newRemainingFeats: Seq[Int] = 
         findAndMergeSubsetsInPartitions(
-          partitions, correlations, subsetEvaluator, maxFails)
+          partitions, correlations, subsetEvaluator, $(searchTermination))
 
       // Clean unneeded correlations (keep corrs with class)
       correlations.clean(newRemainingFeats)
@@ -109,7 +212,7 @@ class CfsFeatureSelector {
 
         // Try to increase the partition size so the number of pair
         // correlations calculated is the maximum allowed by the
-        // initialPartitionSize
+        // $(initPartitionSize)
         val checkedInitialFeatsPairsCount = 
           if (initialFeatsPairsCount == 0) remainingFeatsPairs.size 
           else initialFeatsPairsCount
@@ -132,7 +235,7 @@ class CfsFeatureSelector {
         val newRemainingFeatsSet = BitSet(newRemainingFeats:_*)
 
         // Add locally predictive feats if requested
-        if (!addLocalFeats)
+        if (!$(locallyPredictive))
           newRemainingFeatsSet
         else 
           addLocallyPredictiveFeats(newRemainingFeatsSet, correlations, iClass)
@@ -140,20 +243,10 @@ class CfsFeatureSelector {
       }
     }
 
-    // DEBUG tempsubset
-    val tempsubset = findSubset(
-      initialPartitionSize, remainingFeats, correlations, correlator)
-
-    // DEBUG
-    file = new java.io.FileWriter(
-      s"${resultsFileBasePath}_selectedFeats.txt", true)
-    file.write(tempsubset.mkString(","))
-    file.close
-
-    // DEBUG
-    tempsubset
-
+    findSubset(
+      $(initPartitionSize), remainingFeats, correlations, correlator)
   }
+
 
   private def getPartitionsAndRemainingFeatsPairs(
     partitionSize: Int, 
@@ -192,6 +285,11 @@ class CfsFeatureSelector {
     (partitions, remainingFeatsPairs)
   }
 
+  // A formula based version didn't work because is not enough to substract
+  // corrsWithClass from correlations to obtain the useful already calculated
+  // correlations, this is because there could be correlations that were
+  // calculated and right now are not useful because their feats fall in
+  // diferent partitions but could be useful in future.
   private def countRemainingFeatsPairs(
     partitionSize: Int, 
     remainingFeats: Seq[Int],
@@ -204,22 +302,6 @@ class CfsFeatureSelector {
         correlations)
 
     remainingFeatsPairs.size
-
-    // A formula based version didn't work because is not enough to substract
-    // corrsWithClass from correlations to obtain the useful already calculated
-    // correlations, this is because there could be correlations that were
-    // calculated and right now are not useful because their feats fall in
-    // diferent partitions but could be useful in future.
-
-    // val addClass = if(correlations.isEmpty) 1 else 0
-    // val nFirstPartitions = remainingFeats.size / partitionSize
-    // val firstPartitionsSize = partitionSize + addClass
-    // val lastPartitionSize = remainingFeats.size % partitionSize + addClass
-    // val corrsWithClass = if(!correlations.isEmpty) correlations.nFeats else 0
-    
-    // nFirstPartitions * combinations(firstPartitionsSize, 2) +
-    //   combinations(lastPartitionSize, 2) - 
-    //   (correlations.keys.size - corrsWithClass)
   }
 
   private def getAdjustedPartitionSize(
@@ -265,32 +347,6 @@ class CfsFeatureSelector {
         adjustedPartitionSize
     }
   }
-
-  //   // TODO This could be more efficently calculated by using a formula
-  //   val (_, initialRemainingFeatsPairs) = 
-  //     getPartitionsAndRemainingFeatsPairs(
-  //       initialPartitionSize,
-  //       BitSet(Range(0, nFeats):_*),
-  //       new CorrelationsMatrix, // Simulates isFirtTime
-  //       nFeats) // iClass is only important when isFirstTime 
-
-  //   def doGetAdjustedPartitionSize(adjustedPartitionSize: Int): Int = {
-
-  //     val (_, remainingFeatsPairs) = 
-  //       getPartitionsAndRemainingFeatsPairs(
-  //         adjustedPartitionSize,
-  //         remainingFeats,
-  //         correlations,
-  //         nFeats) 
-  //     if(remainingFeatsPairs.size <= initialRemainingFeatsPairs.size)
-  //       adjustedPartitionSize
-  //     else
-  //       doGetAdjustedPartitionSize(adjustedPartitionSize - 1)
-  //   }
-
-  //   // Start search with the maximum partition size
-  //   doGetAdjustedPartitionSize(remainingFeats.size)
-  // }
 
   private def findAndMergeSubsetsInPartitions(
     partitions: Seq[Seq[Int]], 
@@ -363,151 +419,84 @@ class CfsFeatureSelector {
     doAddFeats(selectedSubset, orderedCandFeats)
   }
 
-  private def factorial(n:BigInt):BigInt = {
-    require(n >= 0, "factorial of negatives is undefined")
-
-    def doFactorial(n:BigInt,result:BigInt):BigInt = 
-      if (n==0) result else doFactorial(n-1,n*result)
-
-    doFactorial(n,1)
-  }
-
-  // TODO n = 50K is supported, 75K isn't.
-  private def combinations(n: Int, r: Int): Int = {
-    if (n < r) 0
-    else if (n == r) 1
-    else (factorial(n) / (factorial(r) * factorial(n-r))).toInt
+  private def dsToDF(dataset: Dataset[_]): DataFrame = {
+    dataset.select(col($(featuresCol)), col($(labelCol)).cast(DoubleType))
   }
 }
 
-// /**
-//  * :: Experimental ::
-//  * Model fitted by [[ReliefFSelector]].
-//  */
-// @Experimental
-// final class CfsSelectorModel private[ml] (selectedFeats: Array[Int]) {
-//     extends Model[CfsSelectorModel] with ReliefFSelectorParams 
-//     // with MLWritable 
-//   {
+object CFSSelector extends DefaultParamsReadable[CFSSelector] {
 
-//   /** @group setParam */
-//   def setSelectionThreshold(value: Double): this.type = 
-//     set(selectionThreshold, value)
+  override def load(path: String): CFSSelector = super.load(path)
+}
 
-//   /** @group setParam */
-//   def setFeaturesCol(value: String): this.type = set(featuresCol, value)
+final class CFSSelectorModel private[ml] (
+  override val uid: String,
+  val selectedFeats: Array[Int])
+  extends Model[CFSSelectorModel] with CFSSelectorParams with MLWritable {
 
-//   /** @group setParam */
-//   def setOutputCol(value: String): this.type = set(outputCol, value)
+  import CFSSelectorModel._
 
-//   /** @group setParam */
-//   def setLabelCol(value: String): this.type = set(labelCol, value)
+  /** @group setParam */
+  def setFeaturesCol(value: String): this.type = set(featuresCol, value)
 
-//   override def transform(data: DataFrame): DataFrame = {
+  /** @group setParam */
+  def setOutputCol(value: String): this.type = set(outputCol, value)
 
-//     val selectedFeatures: Array[Int] = {
+  override def transform(dataset: Dataset[_]): DataFrame = {
+    val slicer = { new VectorSlicer()
+      .setInputCol($(featuresCol))
+      .setOutputCol($(outputCol))
+      .setIndices(selectedFeats)
+    }
 
-//         // Sorted features from most relevant to least (weight, index)
-//         val sortedFeats: Array[(Double, Int)] = 
-//           (featuresWeights.zipWithIndex).sorted(Ordering.by[(Double, Int), Double](_._1 * -1.0)).toArray
+    slicer.transform(dataset)
+  }
 
-//         // Slice according threshold
-//         (sortedFeats
-//           .slice(0,(sortedFeats.size * $(selectionThreshold)).round.toInt)
-//           .map(_._2))
-//       }
+  /**
+   * There is no need to implement this method because all the work is done
+   * by the VectorSlicer
+   */
+  override def transformSchema(schema: StructType): StructType = ???
 
-//     //   if(useKnnSelection) {
-        
-//     //     val weights: Map[Int, Double] = (featuresWeights.indices zip featuresWeights).toMap
+  override def copy(extra: ParamMap): CFSSelectorModel = {
+    val copied = new CFSSelectorModel(uid, selectedFeats)
+    copyValues(copied, extra).setParent(parent)
+  }
 
-//     //     knnBestFeatures(weights, 0.5, -0.5)
+  override def write: MLWriter = new CFSSelectorModelWriter(this)
+}
 
-//     //   } 
+object CFSSelectorModel extends MLReadable[CFSSelectorModel] {
 
-//     val slicer = (new VectorSlicer()
-//       .setInputCol(featuresCol.name)
-//       .setOutputCol(outputCol.name)
-//       .setIndices(selectedFeatures))
+  private[CFSSelectorModel]
+  class CFSSelectorModelWriter(instance: CFSSelectorModel) extends MLWriter {
 
-//     // Return reduced Dataframe
-//     // (slicer
-//     //   .transform(data)
-//     //   .selectExpr("selectedFeatures as features", "label"))
-//     slicer.transform(data)
-//   }
+    private case class Data(selectedFeats: Seq[Int])
 
+    override protected def saveImpl(path: String): Unit = {
+      DefaultParamsWriter.saveMetadata(instance, path, sc)
+      val data = Data(instance.selectedFeats.toSeq)
+      val dataPath = new Path(path, "data").toString
+      sparkSession.createDataFrame(Seq(data)).repartition(1).write.parquet(dataPath)
+    }
+  }
 
-//   def saveResults(basePath: String): Unit = {
-    
-//     println("Adding weights to file:")
-//     var file = new java.io.FileWriter(s"${basePath}_feats_weights.txt", true)
-//     file.write(featuresWeights.head.toString)
-//     featuresWeights.tail.foreach(weight => file.write("," + weight.toString))
-//     file.write("\n")
-//     file.close
+  private class CFSSelectorModelReader extends MLReader[CFSSelectorModel] {
 
-//     println("saving positive feats:")
-//     var weights: Map[Int, Double] = (featuresWeights.indices zip featuresWeights).toMap
-//     var bestFeatures: Array[Int] = 
-//       weights.filter{ case (k: Int, w: Double) => w > 0.0 }
-//              .map{ case (k: Int, w: Double) => k }.toArray
-//     file = new java.io.FileWriter(s"${basePath}_feats_positive.txt", true)
-//     bestFeatures.foreach(feat => file.write(feat.toString + "\n"))
-//     file.close
-//     println("total: " + bestFeatures.size)
+    private val className = classOf[CFSSelectorModel].getName
 
-//     println("saving 10% best feats:")
-//     val sortedFeats: Array[(Int, Double)] = 
-//       (featuresWeights.indices zip featuresWeights).sorted(Ordering.by[(Int, Double), Double](_._2 * -1.0)).toArray
-//     val bestFeats10Perc = 
-//       sortedFeats.slice(0,(sortedFeats.size * 0.10).round.toInt).map(_._1)
-//     file = new java.io.FileWriter(s"${basePath}_feats_10perc.txt", true)
-//     bestFeats10Perc.foreach(feat => file.write(feat.toString + "\n"))
-//     file.close
-//     println("total: " + bestFeats10Perc.size)
+    override def load(path: String): CFSSelectorModel = {
+      val metadata = DefaultParamsReader.loadMetadata(path, sc, className)
+      val dataPath = new Path(path, "data").toString
+      val data = sparkSession.read.parquet(dataPath).select("selectedFeats").head()
+      val selectedFeats = data.getAs[Seq[Int]](0).toArray
+      val model = new CFSSelectorModel(metadata.uid, selectedFeats)
+      DefaultParamsReader.getAndSetParams(model, metadata)
+      model
+    }
+  }
 
-//     println("saving 25% best feats:")
-//     val bestFeats25Perc = 
-//       sortedFeats.slice(0,(sortedFeats.size * 0.25).round.toInt).map(_._1)
-//     file = new java.io.FileWriter(s"${basePath}_feats_25perc.txt", true)
-//     bestFeats25Perc.foreach(feat => file.write(feat.toString + "\n"))
-//     file.close
-//     println("total: " + bestFeats25Perc.size)
-    
-//     println("saving 50% best feats:")
-//     val bestFeats50Perc = 
-//       sortedFeats.slice(0,(sortedFeats.size * 0.50).round.toInt).map(_._1)
-//     file = new java.io.FileWriter(s"${basePath}_feats_50perc.txt", true)
-//     bestFeats50Perc.foreach(feat => file.write(feat.toString + "\n"))
-//     file.close
-//     println("total: " + bestFeats50Perc.size)
-    
-//     println("saving 75% best feats:")
-//     val bestFeats75Perc = 
-//       sortedFeats.slice(0,(sortedFeats.size * 0.75).round.toInt).map(_._1)
-//     file = new java.io.FileWriter(s"${basePath}_feats_75perc.txt", true)
-//     bestFeats75Perc.foreach(feat => file.write(feat.toString + "\n"))
-//     file.close
-//     println("total: " + bestFeats75Perc.size)
+  override def read: MLReader[CFSSelectorModel] = new CFSSelectorModelReader
 
-//     println("saving hits contribution:")
-//     file = new java.io.FileWriter(s"${basePath}_hits_contrib.txt", true)
-//     file.write(totalHitsContributions.toString)
-//     file.close
-
-//     // println("saving knn best feats:")
-//     // weights = (featuresWeights.indices zip featuresWeights).toMap
-//     // bestFeatures = knnBestFeatures(weights, 0.5, -0.5)
-//     // file = new java.io.FileWriter(s"${basePath}_feats_knn.txt", true)
-//     // bestFeatures.foreach(feat => file.write(feat.toString + "\n"))
-//     // file.close
-//     // println("total: " + bestFeatures.size)
-
-//   }
-
-//   override def copy(extra: org.apache.spark.ml.param.ParamMap): org.apache.spark.ml.feature.CfsSelectorModel = ???
-
-//   def transformSchema(schema: org.apache.spark.sql.types.StructType): org.apache.spark.sql.types.StructType = ???
-
-// }
+  override def load(path: String): CFSSelectorModel = super.load(path)
+}
