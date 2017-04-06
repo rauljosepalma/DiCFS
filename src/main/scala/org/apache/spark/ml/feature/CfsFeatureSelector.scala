@@ -102,13 +102,20 @@ final class CFSSelector(override val uid: String)
     transformSchema(informativeDS.schema, logging = true)
 
     val selectedFeats: Seq[Int] = doFit(informativeDS)
-
-    val attrs: Array[Attribute] = 
-      AttributeGroup.fromStructField(
-        informativeDS.schema($(featuresCol))).attributes.get
+      
+    val informativeAttrs: Array[Attribute] = AttributeGroup.fromStructField(
+      informativeDS.schema($(featuresCol))).attributes.get
 
     val selectedFeatsNames: Array[String] = 
-      selectedFeats.map(attrs(_).name.get).toArray
+      selectedFeats.map(informativeAttrs(_).name.get).toArray
+
+    val originalAG  = 
+      AttributeGroup.fromStructField(dataset.schema($(featuresCol)))
+
+    // DEBUG
+    // Show feats indexes based on original dataset
+    println("SELECTED FEATS = " + 
+      selectedFeatsNames.map(originalAG.indexOf).sorted.mkString(","))
 
     copyValues(new CFSSelectorModel(uid, selectedFeatsNames).setParent(this)) 
   }
@@ -122,7 +129,7 @@ final class CFSSelector(override val uid: String)
       $(initPartitionSize) == nFeats || 
       $(initPartitionSize) == 0 || 
       $(initPartitionSize) <= nFeats/2,
-      "If partition size is not zero or equal to the total number of feats, then it must be less than or equal to half size of that total number of feats.")
+      "If partition size is not zero or equal to the total number of (informative) feats, then it must be less than or equal to half size of that total number of (informative) feats.")
 
     SchemaUtils.checkColumnType(schema, $(featuresCol), new VectorUDT)
     SchemaUtils.checkNumericType(schema, $(labelCol))
@@ -213,7 +220,7 @@ final class CFSSelector(override val uid: String)
     }
 
     // DEBUG
-    println(s"CORRS WITH CLASS = ${correlations.toStringCorrsWithClass}")
+    // println(s"CORRS WITH CLASS = ${correlations.toStringCorrsWithClass}")
 
     def findSubset(
       currentPartitionSize: Int,
