@@ -61,7 +61,7 @@ object Main {
     val model = 
         fSelector.fit(df.sample(withReplacement=false, fraction=sampleSize))
 
-    println(s"SELECTED FEATS = ${model.selectedFeats.mkString(",")}")
+    println(s"SELECTED FEATS = ${model.selectedFeatsNames.sorted.mkString(",")}")
 
     // val feats: BitSet = 
     //   featureSelector.fit()

@@ -5,7 +5,7 @@ import org.apache.hadoop.fs.Path
 import org.apache.spark.annotation.Since
 import org.apache.spark.ml._
 import org.apache.spark.ml.attribute.{AttributeGroup, _}
-import org.apache.spark.ml.linalg.{Vector, VectorUDT}
+import org.apache.spark.ml.linalg.{Vector, VectorUDT,Vectors}
 import org.apache.spark.ml.param._
 import org.apache.spark.ml.param.shared._
 import org.apache.spark.ml.util._
@@ -97,17 +97,25 @@ final class CFSSelector(override val uid: String)
   def setLabelCol(value: String): this.type = set(labelCol, value)
 
   override def fit(dataset: Dataset[_]): CFSSelectorModel = {
-    transformSchema(dataset.schema, logging = true)
+    val informativeDS = filterNonInformativeFeats(dataset)
 
-    val selectedFeats: BitSet = doFit(dataset)
+    transformSchema(informativeDS.schema, logging = true)
 
-    copyValues(new CFSSelectorModel(uid, selectedFeats.toArray).setParent(this)) 
+    val selectedFeats: Seq[Int] = doFit(informativeDS)
+
+    val attrs: Array[Attribute] = 
+      AttributeGroup.fromStructField(
+        informativeDS.schema($(featuresCol))).attributes.get
+
+    val selectedFeatsNames: Array[String] = 
+      selectedFeats.map(attrs(_).name.get).toArray
+
+    copyValues(new CFSSelectorModel(uid, selectedFeatsNames).setParent(this)) 
   }
 
   override def transformSchema(schema: StructType): StructType = {
 
-    val nFeats = 
-      AttributeGroup.fromStructField(schema($(featuresCol))).size 
+    val nFeats = AttributeGroup.fromStructField(schema($(featuresCol))).size
 
     // TODO DEBUG
     require(
@@ -123,11 +131,59 @@ final class CFSSelector(override val uid: String)
 
   override def copy(extra: ParamMap): CFSSelector = defaultCopy(extra)
 
+  // DEBUG
+  private def filterNonInformativeFeats(dataset: Dataset[_]): Dataset[_] = {
+    val ag = AttributeGroup.fromStructField(dataset.schema($(featuresCol)))
+    val attrs: Array[Attribute] = ag.attributes.get
+    
+    attrs.foreach{ attr => 
+      require(attr.isNominal, "All features must represent nominal attributes in metadata")
+      require(attr.name != None, "All features must have a name in metadata")
+    }
+
+    // Non informative feats contain a single value
+    val informativeFeatsIndexes: Array[Int] = { attrs
+      .zipWithIndex
+      .filter{ case (attr, _) =>
+        attr.asInstanceOf[NominalAttribute].getNumValues.get > 1
+      }
+      .map{ case (_, index) => index }
+    }
+
+    val informativeAttrs: AttributeGroup = 
+      new AttributeGroup(ag.name, informativeFeatsIndexes.map(attrs))
+
+    val nNonInformativeFeats = attrs.size - informativeFeatsIndexes.size
+    
+    if(nNonInformativeFeats > 0) {
+
+      print(s"$nNonInformativeFeats feature(s) with a single value will not be considered")
+
+      val informativeFeatsUDF = udf{ (features: Vector) => 
+        Vectors.dense(
+          informativeFeatsIndexes.map{ case (i: Int) => features(i) }) 
+      }
+
+      { dataset
+        // Filter feats
+        .withColumn(
+          $(featuresCol),
+          informativeFeatsUDF(col($(featuresCol))))
+        // Preserve metadata
+        .withColumn(
+          $(featuresCol),
+          col($(featuresCol)).as("_", informativeAttrs.toMetadata))
+      }
+      
+    } else {
+      dataset
+    }
+  }
+
   // Searches a subset of features given the data
   // dataset DataFrame must be discretized
   // If $(initPartitionSize) == nFeats in dataset, then no partitioning is perfomed
-  private def doFit(dataset: Dataset[_]): BitSet = {
-
+  private def doFit(dataset: Dataset[_]): Seq[Int] = {
     // TODO DEBUG
     val nFeats = AttributeGroup.fromStructField(dataset.schema($(featuresCol))).size 
     val nInstances: Long = dataset.count
@@ -151,7 +207,6 @@ final class CFSSelector(override val uid: String)
     // Sort remainingFeats by their corr with class (from max to min) and
     // remove feats with zero correlation
     val remainingFeats = { Range(0, nFeats)
-      .filter(correlations(_, iClass) != 0.0)
       .sorted(Ordering.by[Int, Double]{ iFeat => 
         correlations(iFeat, iClass) * -1.0
       })
@@ -165,7 +220,7 @@ final class CFSSelector(override val uid: String)
       remainingFeats: Seq[Int], 
       correlations: CorrelationsMatrix,
       correlator: SymmetricUncertaintyCorrelator,
-      initialFeatsPairsCount: Int=0): BitSet = {
+      initialFeatsPairsCount: Int=0): Seq[Int] = {
 
       val (partitions: Seq[Seq[Int]], remainingFeatsPairs: Seq[(Int,Int)]) = 
         getPartitionsAndRemainingFeatsPairs(
@@ -238,13 +293,11 @@ final class CFSSelector(override val uid: String)
 
       } else {
 
-        val newRemainingFeatsSet = BitSet(newRemainingFeats:_*)
-
         // Add locally predictive feats if requested
         if (!$(locallyPredictive))
-          newRemainingFeatsSet
+          newRemainingFeats
         else 
-          addLocallyPredictiveFeats(newRemainingFeatsSet, correlations, iClass)
+          addLocallyPredictiveFeats(newRemainingFeats, correlations, iClass)
 
       }
     }
@@ -384,9 +437,9 @@ final class CFSSelector(override val uid: String)
   }
 
   private def addLocallyPredictiveFeats(
-    selectedSubset: BitSet, 
+    selectedSubset: Seq[Int], 
     correlations: CorrelationsMatrix, 
-    iClass: Int) : BitSet = {
+    iClass: Int) : Seq[Int] = {
 
     // Descending order remaining feats according to their correlation with
     // the class
@@ -397,7 +450,7 @@ final class CFSSelector(override val uid: String)
           (a, b) => correlations(a, iClass) > correlations(b, iClass)}
 
     def doAddFeats(
-      extendedSubset: BitSet, orderedCandFeats: Seq[Int]): BitSet = {
+      extendedSubset: Seq[Int], orderedCandFeats: Seq[Int]): Seq[Int] = {
 
       if (orderedCandFeats.isEmpty) {
         extendedSubset
@@ -414,7 +467,7 @@ final class CFSSelector(override val uid: String)
           // DEBUG
           println(s"ADDING LOCALLY PREDICTIVE FEAT: $candFeat")
           doAddFeats(
-            extendedSubset + candFeat, orderedCandFeats.tail)
+            extendedSubset :+ candFeat, orderedCandFeats.tail)
         // Ignore feat
         } else {
           doAddFeats(extendedSubset, orderedCandFeats.tail)
@@ -437,7 +490,7 @@ object CFSSelector extends DefaultParamsReadable[CFSSelector] {
 
 final class CFSSelectorModel private[ml] (
   override val uid: String,
-  val selectedFeats: Array[Int])
+  val selectedFeatsNames: Array[String])
   extends Model[CFSSelectorModel] with CFSSelectorParams with MLWritable {
 
   import CFSSelectorModel._
@@ -452,7 +505,7 @@ final class CFSSelectorModel private[ml] (
     val slicer = { new VectorSlicer()
       .setInputCol($(featuresCol))
       .setOutputCol($(outputCol))
-      .setIndices(selectedFeats)
+      .setNames(selectedFeatsNames)
     }
 
     slicer.transform(dataset)
@@ -465,7 +518,7 @@ final class CFSSelectorModel private[ml] (
   override def transformSchema(schema: StructType): StructType = ???
 
   override def copy(extra: ParamMap): CFSSelectorModel = {
-    val copied = new CFSSelectorModel(uid, selectedFeats)
+    val copied = new CFSSelectorModel(uid, selectedFeatsNames)
     copyValues(copied, extra).setParent(parent)
   }
 
@@ -477,11 +530,11 @@ object CFSSelectorModel extends MLReadable[CFSSelectorModel] {
   private[CFSSelectorModel]
   class CFSSelectorModelWriter(instance: CFSSelectorModel) extends MLWriter {
 
-    private case class Data(selectedFeats: Seq[Int])
+    private case class Data(selectedFeatsNames: Seq[String])
 
     override protected def saveImpl(path: String): Unit = {
       DefaultParamsWriter.saveMetadata(instance, path, sc)
-      val data = Data(instance.selectedFeats.toSeq)
+      val data = Data(instance.selectedFeatsNames.toSeq)
       val dataPath = new Path(path, "data").toString
       sparkSession.createDataFrame(Seq(data)).repartition(1).write.parquet(dataPath)
     }
@@ -494,9 +547,9 @@ object CFSSelectorModel extends MLReadable[CFSSelectorModel] {
     override def load(path: String): CFSSelectorModel = {
       val metadata = DefaultParamsReader.loadMetadata(path, sc, className)
       val dataPath = new Path(path, "data").toString
-      val data = sparkSession.read.parquet(dataPath).select("selectedFeats").head()
-      val selectedFeats = data.getAs[Seq[Int]](0).toArray
-      val model = new CFSSelectorModel(metadata.uid, selectedFeats)
+      val data = sparkSession.read.parquet(dataPath).select("selectedFeatsNames").head()
+      val selectedFeatsNames = data.getAs[Seq[String]](0).toArray
+      val model = new CFSSelectorModel(metadata.uid, selectedFeatsNames)
       DefaultParamsReader.getAndSetParams(model, metadata)
       model
     }

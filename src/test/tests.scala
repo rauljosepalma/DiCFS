@@ -1,3 +1,23 @@
+// START SPARK CONTEXT IN SCALA REPL
+
+import org.apache.spark.SparkContext
+import org.apache.spark.SparkConf
+
+val conf = new SparkConf().setAppName("cfs").setMaster("local[*]")
+new SparkContext(conf)
+
+import rauljosepalma.sparkmltools._
+
+val df = DataFrameIO.readDFFromAny("/home/raul/Datasets/Large/ECBDL14/head1000-weka-discrete.arff")
+
+import org.apache.spark.ml.feature._
+val selector = new CFSSelector().setFeaturesCol("features")
+val useful = selector.filterNonInformativeFeats(df)
+
+import org.apache.spark.ml.attribute.{AttributeGroup, _}
+val ag = AttributeGroup.fromStructField(useful.schema("features"))
+
+
 import org.apache.spark.ml.feature._
 import scala.collection.immutable.BitSet
 
