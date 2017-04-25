@@ -24,7 +24,6 @@ abstract class EvaluableState[T] extends Serializable {
 
 // Represents a state and its merit
 class EvaluatedState[T](val state: EvaluableState[T], val merit: Double)
-
   extends Ordered[EvaluatedState[T]] with Serializable {
 
   def compare(that: EvaluatedState[T]) = {

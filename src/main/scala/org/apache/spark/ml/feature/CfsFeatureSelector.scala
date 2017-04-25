@@ -101,7 +101,7 @@ final class CFSSelector(override val uid: String)
 
     transformSchema(informativeDS.schema, logging = true)
 
-    val selectedFeats: Seq[Int] = doFit(informativeDS)
+    val selectedFeats: BitSet = doFit(informativeDS)
       
     val informativeAttrs: Array[Attribute] = AttributeGroup.fromStructField(
       informativeDS.schema($(featuresCol))).attributes.get
@@ -109,7 +109,7 @@ final class CFSSelector(override val uid: String)
     val selectedFeatsNames: Array[String] = 
       selectedFeats.map(informativeAttrs(_).name.get).toArray
 
-    val originalAG  = 
+    val originalAG: AttributeGroup  = 
       AttributeGroup.fromStructField(dataset.schema($(featuresCol)))
 
     // DEBUG
@@ -190,7 +190,7 @@ final class CFSSelector(override val uid: String)
   // Searches a subset of features given the data
   // dataset DataFrame must be discretized
   // If $(initPartitionSize) == nFeats in dataset, then no partitioning is perfomed
-  private def doFit(dataset: Dataset[_]): Seq[Int] = {
+  private def doFit(dataset: Dataset[_]): BitSet = {
     // TODO DEBUG
     val nFeats = AttributeGroup.fromStructField(dataset.schema($(featuresCol))).size 
     val nInstances: Long = dataset.count
@@ -211,47 +211,41 @@ final class CFSSelector(override val uid: String)
     val correlations = new CorrelationsMatrix(nFeats)
     // Update correlations matrix (with corrs with class)
     correlations.update(remainingFeatsPairs, correlator)
-    // Sort remainingFeats by their corr with class (from max to min) and
+    
+    // Sort remainingSubsets by their corr with class (from max to min) and
     // remove feats with zero correlation
-    val remainingFeats = { Range(0, nFeats)
-      .sorted(Ordering.by[Int, Double]{ iFeat => 
-        correlations(iFeat, iClass) * -1.0
-      })
-    }
+    val remainingSubsets: Seq[EvaluatedFeaturesSubset] = 
+      Range(0, nFeats).map{ 
+        iFeat => new EvaluatedFeaturesSubset(
+          new FeaturesSubset(BitSet(iFeat), BitSet(iFeat)), 
+              correlations(iFeat, iClass))
+      }.sortWith(_ > _)
 
     // DEBUG
     // println(s"CORRS WITH CLASS = ${correlations.toStringCorrsWithClass}")
 
     def findSubset(
       currentPartitionSize: Int,
-      remainingFeats: Seq[Int], 
+      remainingSubsets: Seq[EvaluatedFeaturesSubset], 
       correlations: CorrelationsMatrix,
       correlator: SymmetricUncertaintyCorrelator,
-      initialFeatsPairsCount: Int=0): Seq[Int] = {
+      initialFeatsPairsCount: Int=0): BitSet = {
 
-      val (partitions: Seq[Seq[Int]], remainingFeatsPairs: Seq[(Int,Int)]) = 
-        getPartitionsAndRemainingFeatsPairs(
-          currentPartitionSize,
-          remainingFeats,
-          correlations)
+      val partitions: Seq[Seq[FeaturesSubset]] = 
+        getStratifiedPartitions(currentPartitionSize, remainingSubsets)
+
+      val remainingFeatsPairs: Seq[(Int,Int)] = 
+        getRemainingFeatsPairs(partitions)
 
       // DEBUG
-      // println("partitions:")
-      // println(partitions.mkString("\n"))
-      // println("remainingFeats:")
-      // println(remainingFeats.mkString(" "))
-      // println("remainingFeatsPairs:")
-      // println(remainingFeatsPairs.mkString(" "))
+      println("partitions:")
+      println(partitions.mkString("\n"))
+      println("remainingSubsets:")
+      println(remainingSubsets.mkString(" "))
+      println("remainingFeatsPairs:")
+      println(remainingFeatsPairs.mkString(" "))
       println(s"PARTITION SIZE = $currentPartitionSize")
       println(s"ABOUT TO PROCESS ${remainingFeatsPairs.size} FEATS PAIRS...")
-      // DEBUG TEST
-      val pairsCount = countRemainingFeatsPairs(
-        currentPartitionSize,
-        remainingFeats,
-        correlations)
-      require(pairsCount == remainingFeatsPairs.size, 
-        s"ERROR: pairsCount != remainingFeatsPairs.size ($pairsCount != ${remainingFeatsPairs.size})")
-      // END-DEBUG
 
       // The hard-work
       val newCtm = ContingencyTablesMatrix(dsToDF(dataset), remainingFeatsPairs)
@@ -261,17 +255,17 @@ final class CFSSelector(override val uid: String)
       correlations.update(remainingFeatsPairs, correlator)
       // Create a new evaluator (just to skip passing it as param)
       val subsetEvaluator = new CfsSubsetEvaluator(correlations, iClass)
-      // Search subsets on each partition, merge (and sort) results.
-      val newRemainingFeats: Seq[Int] = 
-        findAndMergeSubsetsInPartitions(
+      // Search subsets on each partition, sort results
+      val newRemainingSubsets: Seq[EvaluatedFeaturesSubset] = 
+        findSubsetsInPartitions(
           partitions, correlations, subsetEvaluator, $(searchTermination))
 
       // Clean unneeded correlations (keep corrs with class)
-      correlations.clean(newRemainingFeats)
+      correlations.clean(newRemainingSubsets)
 
       //DEBUG
       println(s"NUMBER OF EVALUATIONS = ${subsetEvaluator.numOfEvaluations}")
-      println(s"BEST SUBSET =  ${newRemainingFeats.toString} SIZE = ${newRemainingFeats.size}")
+      println(s"FOUND ${newRemainingSubsets.size} SUBSETS =  ${newRemainingSubsets.mkString("\n")}")
 
       // End when the features where not partitioned
       // Observe the adjustedPartitionSize warranties that the single partition
@@ -287,13 +281,11 @@ final class CFSSelector(override val uid: String)
         val adjustedPartitionSize = 
           getAdjustedPartitionSize(
             initialFeatsPairsCount = checkedInitialFeatsPairsCount,
-            currentPartitionSize,
-            newRemainingFeats,
-            correlations)
+            newRemainingSubsets)
 
         findSubset(
           adjustedPartitionSize, 
-          newRemainingFeats, 
+          newRemainingSubsets, 
           correlations,
           correlator, 
           checkedInitialFeatsPairsCount)
@@ -302,151 +294,268 @@ final class CFSSelector(override val uid: String)
 
         // Add locally predictive feats if requested
         if (!$(locallyPredictive))
-          newRemainingFeats
+          newRemainingSubsets(0).fSubset.data
         else 
-          addLocallyPredictiveFeats(newRemainingFeats, correlations, iClass)
+          addLocallyPredictiveFeats(newRemainingSubsets(0).fSubset.data, 
+            correlations, iClass)
 
       }
     }
 
     findSubset(
-      $(initPartitionSize), remainingFeats, correlations, correlator)
+      $(initPartitionSize), remainingSubsets, correlations, correlator)
   }
 
-
-  private def getPartitionsAndRemainingFeatsPairs(
+  // TODO make a diagram of this method!!!
+  // remainingSubsets must be sorted from greatest to least
+  private def getStratifiedPartitions(
     partitionSize: Int, 
-    remainingFeats: Seq[Int],
-    correlations: CorrelationsMatrix): (Seq[Seq[Int]], Seq[(Int,Int)]) = {
-
-    // If remaningFeats.size < partitionSize then nPartitions == 1
-    val nPartitions: Int = {
-      if (remainingFeats.size % partitionSize == 0)
-        remainingFeats.size / partitionSize 
-      else remainingFeats.size / partitionSize + 1
-    }
-
-    // Sequential splits of partitionSize from features Ex.: If
-    // remainingFeats.size = 5, 2 size splits are: [[0,1],[2,3],[4]]
-    val partitions: Seq[Seq[Int]] = {
-      (0 until nPartitions - 1).map{ i => 
-        Range(i * partitionSize, (i+1) * partitionSize).map(remainingFeats)
-      } :+ 
-      Range((nPartitions-1) * partitionSize, remainingFeats.size)
-        .map(remainingFeats)
-    }
-
-    // Feats pairs whose correlations have not been evaluated, 
-    // Its important to keep (i,j), where i < j
-    val remainingFeatsPairs: Seq[(Int,Int)] = {
-      partitions
-        .flatMap( _.combinations(2) )
-        .map{ pair => 
-          if (pair(0) < pair(1)) (pair(0),pair(1)) else (pair(1),pair(0)) 
-        }
-        .diff(correlations.keys)
-    }
+    remainingSubsets: Seq[EvaluatedFeaturesSubset])
+    : Seq[Seq[FeaturesSubset]] = {
     
+    // Put subsets in a sigle partition
+    if(partitionSize >= remainingSubsets.size) {
+      Seq(remainingSubsets.map(_.fSubset))
+    } else {
 
-    (partitions, remainingFeatsPairs)
-  }
+      // Slices refer to the division in original sorted subsets
+      // nPartitions represent also te size of each slice
+      val nPartitions = remainingSubsets.size / partitionSize
+      val nFirstSlices = partitionSize
+      val firtSlices: Seq[Seq[FeaturesSubset]] = 
+        (0 until nFirstSlices).map{ i =>
+          Range(i * nPartitions, (i+1) * nPartitions)
+            .map(remainingSubsets.map(_.fSubset))
+        }
+      val lastSlice: Seq[FeaturesSubset] = 
+        Range(nFirstSlices * nPartitions, remainingSubsets.size)
+          .map(remainingSubsets.map(_.fSubset))
 
-  // A formula based version didn't work because is not enough to substract
-  // corrsWithClass from correlations to obtain the useful already calculated
-  // correlations, this is because there could be correlations that were
-  // calculated and right now are not useful because their feats fall in
-  // diferent partitions but could be useful in future.
-  private def countRemainingFeatsPairs(
-    partitionSize: Int, 
-    remainingFeats: Seq[Int],
-    correlations: CorrelationsMatrix): Int = {
+      // Partitions are the definitive result
+      val firstPartitions: Seq[Seq[FeaturesSubset]] = 
+        (0 until nPartitions).map{ i =>
+          firtSlices.map(_(i))
+      }
+      // add last slice elements to first partitions
+      val completePartitions: Seq[Seq[FeaturesSubset]] = 
+        firstPartitions.zipWithIndex.map{ 
+          case (partition, idx) =>
+            if (idx < lastSlice.size)
+              partition :+ lastSlice(idx)
+            else
+              partition
+        }
 
-    val (_, remainingFeatsPairs: Seq[(Int,Int)]) = 
-      getPartitionsAndRemainingFeatsPairs(
-        partitionSize,
-        remainingFeats,
-        correlations)
+      completePartitions
+    }
 
-    remainingFeatsPairs.size
   }
 
   private def getAdjustedPartitionSize(
     initialFeatsPairsCount: Int,
-    currentPartitionSize: Int,
-    remainingFeats: Seq[Int],
-    correlations: CorrelationsMatrix): Int = {
+    remainingSubsets: Seq[EvaluatedFeaturesSubset]): Int = {
 
-    require(!correlations.isEmpty, 
-      "This function should never be called in the first time evaluation")
+    val averageSubsetSize: Double = 
+      remainingSubsets.map(_.fSubset.size).sum.toDouble / remainingSubsets.size
 
-    // The partition size will always grow, so if there are only two option
-    // it will take the max (remainingFeats.size)
-    if(currentPartitionSize >= remainingFeats.size - 1)
-      remainingFeats.size
-    else {
-      // Get two points to estimate slope
-      val minFeatsPairsCount = countRemainingFeatsPairs(
-        partitionSize=currentPartitionSize, 
-        remainingFeats,
-        correlations)
-      val nextFeatsPairsCount = countRemainingFeatsPairs(
-        partitionSize=currentPartitionSize + 1, 
-        remainingFeats,
-        correlations)
-      val slope: Double = (nextFeatsPairsCount - minFeatsPairsCount).toDouble 
-       // / (currentPartitionSize + 1 - currentPartitionSize) => 1
+    def doSearchPartitionSize(psize: Int): Int = {
+      val featsPairsCount = 
+        scala.math.pow(averageSubsetSize, psize) * remainingSubsets.size.toDouble / psize
 
-      // Given that y is featsPairsCount, and x is partitionSize y = slope * x
-      // + b, b is always 0. By solving for x we obtaint the
-      // adjustedPartitionSize. That is, the partitionSize that corresponds to
-      // the same featsPairsCount during the first partitioned subset search.
-      val adjustedPartitionSize = (initialFeatsPairsCount / slope).toInt
-
-      if (adjustedPartitionSize >= remainingFeats.size)
-        remainingFeats.size
-      // When the suggested size is in the second half, a half size is
-      // preferred to do a more equilibrate processing and with less
-      // calculations due to the smaller partition size
-      else if (adjustedPartitionSize >= remainingFeats.size / 2)
-        remainingFeats.size / 2
-      else
-        adjustedPartitionSize
+      if (psize == remainingSubsets.size) 
+        psize
+      else if (featsPairsCount > initialFeatsPairsCount)
+        psize - 1
+      else 
+        doSearchPartitionSize(psize + 1)
     }
+
+    doSearchPartitionSize(2)
+
   }
 
-  private def findAndMergeSubsetsInPartitions(
-    partitions: Seq[Seq[Int]], 
-    correlations: CorrelationsMatrix,
-    evaluator: CfsSubsetEvaluator,
-    maxFails: Int): Seq[Int] = {
+  // Feats pairs whose correlations have not been evaluated, 
+  // Its important to keep (i,j), where i < j
+  private def getRemainingFeatsPairs(
+    partitions: Seq[Seq[FeaturesSubset]]): Seq[(Int, Int)] = {
 
-    val mergedFeats: Seq[Int] = 
-      partitions.flatMap{ partition => 
-        val optimizer = 
-          new BestFirstSearcher(
-            initialState = new FeaturesSubset(BitSet(), BitSet(partition:_*)),
-            evaluator,
-            maxFails)
-        val result: EvaluatedState[BitSet] = optimizer.search
+    partitions.flatMap{ partition =>
 
-        //DEBUG
-        if(partitions.size == 1){
-          println(s"BEST MERIT= ${result.merit}")
-        }
-        
-        result.state.data
+      val mergedPartition: Seq[Int] = 
+        partition.map(_.data).reduce(_ ++ _).toSeq
+
+      val mergedPartitionFeatsPairs: Seq[(Int, Int)] = 
+        mergedPartition.combinations(2).toSeq.map(p => (p(0),p(1)))
+
+      val calculatedFeatsPairs: Seq[(Int,Int)] = partition.flatMap{
+        _.data.toSeq.combinations(2).toSeq.map(p => (p(0),p(1)))
       }
 
-    // Due to the BitSet conversion, sorting is lost
-    mergedFeats.sorted(
-      Ordering.by[Int, Double]( 
-        iFeat => correlations(iFeat, correlations.nFeats) * -1.0))
+      mergedPartitionFeatsPairs.diff(calculatedFeatsPairs)
+
+    }
+
+    // TODO DELETE
+    // partitions
+    //   .flatMap( _.combinations(2) )
+    //   .map{ pair => 
+    //     if (pair(0) < pair(1)) (pair(0),pair(1)) else (pair(1),pair(0)) 
+    //   }
+    //   .diff(correlations.keys)
   }
 
+  // TODO DELETE
+  // A formula based version didn't work because is not enough to substract
+  // corrsWithClass from correlations to obtain the useful already calculated
+  // correlations, this is because there could be correlations that were
+  // calculated and right now are not useful because their feats fall in
+  // different partitions but could be useful in future.
+  // private def countRemainingFeatsPairs(
+  //   partitionSize: Int, 
+  //   remainingFeats: Seq[Int],
+  //   correlations: CorrelationsMatrix): Int = {
+
+  //   val partitions: Seq[Seq[Int]] = 
+  //     getStratifiedPartitions(partitionSize, remainingFeats)
+
+  //   val remainingFeatsPairs: Seq[(Int,Int)]) = 
+  //     getRemainingFeatsPairs(partitions, correlations)
+
+  //   remainingFeatsPairs.size
+  // }
+
+  // TODO DELETE
+  // private def getAdjustedPartitionSize(
+  //   initialFeatsPairsCount: Int,
+  //   currentPartitionSize: Int,
+  //   remainingFeats: Seq[Int],
+  //   correlations: CorrelationsMatrix): Int = {
+
+  //   require(!correlations.isEmpty, 
+  //     "This function should never be called in the first time evaluation")
+
+  //   // The partition size will always grow, so if there are only two option
+  //   // it will take the max (remainingFeats.size)
+  //   if(currentPartitionSize >= remainingFeats.size - 1)
+  //     remainingFeats.size
+  //   else {
+  //     // Get two points to estimate slope
+  //     val minFeatsPairsCount = countRemainingFeatsPairs(
+  //       partitionSize=currentPartitionSize, 
+  //       remainingFeats,
+  //       correlations)
+  //     val nextFeatsPairsCount = countRemainingFeatsPairs(
+  //       partitionSize=currentPartitionSize + 1, 
+  //       remainingFeats,
+  //       correlations)
+  //     val slope: Double = (nextFeatsPairsCount - minFeatsPairsCount).toDouble 
+  //      // / (currentPartitionSize + 1 - currentPartitionSize) => 1
+
+  //     // Given that y is featsPairsCount, and x is partitionSize y = slope * x
+  //     // + b, b is always 0. By solving for x we obtaint the
+  //     // adjustedPartitionSize. That is, the partitionSize that corresponds to
+  //     // the same featsPairsCount during the first partitioned subset search.
+  //     val adjustedPartitionSize = (initialFeatsPairsCount / slope).toInt
+
+  //     if (adjustedPartitionSize >= remainingFeats.size)
+  //       remainingFeats.size
+  //     // When the suggested size is in the second half, a half size is
+  //     // preferred to do a more equilibrate processing and with less
+  //     // calculations due to the smaller partition size
+  //     else if (adjustedPartitionSize >= remainingFeats.size / 2)
+  //       remainingFeats.size / 2
+  //     else
+  //       adjustedPartitionSize
+  //   }
+  // }
+
+
+  private def findSubsetsInPartitions(
+    partitions: Seq[Seq[FeaturesSubset]], 
+    correlations: CorrelationsMatrix,
+    evaluator: CfsSubsetEvaluator,
+    maxFails: Int): Seq[EvaluatedFeaturesSubset] = {
+
+    partitions.map{ partition =>
+
+      val mergedPartition: BitSet = partition.map(_.data).reduce(_ ++ _)
+
+      val optimizer = 
+        new BestFirstSearcher(
+          initialState = new FeaturesSubset(BitSet(), mergedPartition),
+          evaluator,
+          maxFails)
+      val result: EvaluatedState[BitSet] = optimizer.search
+
+      //DEBUG
+      if(partitions.size == 1){
+        println(s"BEST MERIT= ${result.merit}")
+      }
+
+      new EvaluatedFeaturesSubset(
+        new FeaturesSubset(result.state.data, mergedPartition), result.merit)
+
+    }.sortWith(_ > _)
+
+    // TODO DELETE
+
+    // val mergedFeats: Seq[Int] = 
+    //   partitions.flatMap{ partition => 
+    //     val optimizer = 
+    //       new BestFirstSearcher(
+    //         initialState = new FeaturesSubset(BitSet(), BitSet(partition:_*)),
+    //         evaluator,
+    //         maxFails)
+    //     val result: EvaluatedState[BitSet] = optimizer.search
+
+    //     //DEBUG
+    //     if(partitions.size == 1){
+    //       println(s"BEST MERIT= ${result.merit}")
+    //     }
+        
+    //     result.state.data
+    //   }
+
+    // Due to the BitSet conversion, sorting is lost
+    // mergedFeats.sorted(
+    //   Ordering.by[Int, Double]( 
+    //     iFeat => correlations(iFeat, correlations.nFeats) * -1.0))
+  }
+
+  // TODO DELETE
+  // private def findAndMergeSubsetsInPartitions(
+  //   partitions: Seq[Seq[Int]], 
+  //   correlations: CorrelationsMatrix,
+  //   evaluator: CfsSubsetEvaluator,
+  //   maxFails: Int): Seq[Int] = {
+
+  //   val mergedFeats: Seq[Int] = 
+  //     partitions.flatMap{ partition => 
+  //       val optimizer = 
+  //         new BestFirstSearcher(
+  //           initialState = new FeaturesSubset(BitSet(), BitSet(partition:_*)),
+  //           evaluator,
+  //           maxFails)
+  //       val result: EvaluatedState[BitSet] = optimizer.search
+
+  //       //DEBUG
+  //       if(partitions.size == 1){
+  //         println(s"BEST MERIT= ${result.merit}")
+  //       }
+        
+  //       result.state.data
+  //     }
+
+  //   // Due to the BitSet conversion, sorting is lost
+  //   mergedFeats.sorted(
+  //     Ordering.by[Int, Double]( 
+  //       iFeat => correlations(iFeat, correlations.nFeats) * -1.0))
+  // }
+
   private def addLocallyPredictiveFeats(
-    selectedSubset: Seq[Int], 
+    selectedSubset: BitSet, 
     correlations: CorrelationsMatrix, 
-    iClass: Int) : Seq[Int] = {
+    iClass: Int) : BitSet = {
 
     // Descending order remaining feats according to their correlation with
     // the class
@@ -457,7 +566,7 @@ final class CFSSelector(override val uid: String)
           (a, b) => correlations(a, iClass) > correlations(b, iClass)}
 
     def doAddFeats(
-      extendedSubset: Seq[Int], orderedCandFeats: Seq[Int]): Seq[Int] = {
+      extendedSubset: BitSet, orderedCandFeats: Seq[Int]): BitSet = {
 
       if (orderedCandFeats.isEmpty) {
         extendedSubset
@@ -474,7 +583,7 @@ final class CFSSelector(override val uid: String)
           // DEBUG
           println(s"ADDING LOCALLY PREDICTIVE FEAT: $candFeat")
           doAddFeats(
-            extendedSubset :+ candFeat, orderedCandFeats.tail)
+            extendedSubset + candFeat, orderedCandFeats.tail)
         // Ignore feat
         } else {
           doAddFeats(extendedSubset, orderedCandFeats.tail)
@@ -491,7 +600,6 @@ final class CFSSelector(override val uid: String)
 }
 
 object CFSSelector extends DefaultParamsReadable[CFSSelector] {
-
   override def load(path: String): CFSSelector = super.load(path)
 }
 

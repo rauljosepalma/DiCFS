@@ -27,10 +27,10 @@ class CorrelationsMatrix(val nFeats: Int) {
     }
   }
 
-  // Clean corrs not in remainingFeats except corrs with class
-  def clean(remainingFeats: Seq[Int]) = {
-
-    val remainingFeatsSet = BitSet(remainingFeats:_*)
+  // Clean corrs not in remainingSubsets except corrs with class
+  def clean(remainingSubsets: Seq[EvaluatedFeaturesSubset]) = {
+    val remainingFeatsSet = 
+      remainingSubsets.map(_.fSubset.data).reduce(_ ++ _)
     data.retain{ case ((iFeatA: Int, iFeatB: Int), _) =>
       ((remainingFeatsSet.contains(iFeatA) && 
         remainingFeatsSet.contains(iFeatB)) 

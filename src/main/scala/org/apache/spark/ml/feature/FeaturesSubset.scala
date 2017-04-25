@@ -18,3 +18,6 @@ class FeaturesSubset(feats: BitSet, domain: BitSet)
   }
 
 }
+
+class EvaluatedFeaturesSubset(val fSubset: FeaturesSubset, merit: Double)
+  extends EvaluatedState[BitSet](fSubset, merit)
