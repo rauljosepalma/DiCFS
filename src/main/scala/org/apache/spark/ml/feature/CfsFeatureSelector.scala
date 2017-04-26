@@ -212,13 +212,12 @@ final class CFSSelector(override val uid: String)
     // Update correlations matrix (with corrs with class)
     correlations.update(remainingFeatsPairs, correlator)
     
-    // Sort remainingSubsets by their corr with class (from max to min) and
-    // remove feats with zero correlation
+    // Sort remainingSubsets by their corr with class (from max to min)
     val remainingSubsets: Seq[EvaluatedFeaturesSubset] = 
       Range(0, nFeats).map{ 
         iFeat => new EvaluatedFeaturesSubset(
           new FeaturesSubset(BitSet(iFeat), BitSet(iFeat)), 
-              correlations(iFeat, iClass))
+          correlations(iFeat, iClass))
       }.sortWith(_ > _)
 
     // DEBUG
@@ -265,7 +264,7 @@ final class CFSSelector(override val uid: String)
 
       //DEBUG
       println(s"NUMBER OF EVALUATIONS = ${subsetEvaluator.numOfEvaluations}")
-      println(s"FOUND ${newRemainingSubsets.size} SUBSETS =  ${newRemainingSubsets.mkString("\n")}")
+      println(s"FOUND ${newRemainingSubsets.size} SUBSETS = \n${newRemainingSubsets.mkString("\n")}")
 
       // End when the features where not partitioned
       // Observe the adjustedPartitionSize warranties that the single partition
@@ -355,17 +354,33 @@ final class CFSSelector(override val uid: String)
     initialFeatsPairsCount: Int,
     remainingSubsets: Seq[EvaluatedFeaturesSubset]): Int = {
 
-    val averageSubsetSize: Double = 
-      remainingSubsets.map(_.fSubset.size).sum.toDouble / remainingSubsets.size
+    def factorial(n:BigInt):BigInt = {
+      require(n >= 0, "factorial of negatives is undefined")
+      def doFactorial(n:BigInt,result:BigInt):BigInt = 
+        if (n==0) result else doFactorial(n-1,n*result)
+      doFactorial(n,1)
+    }
+    // TODO n = 50K is supported, 75K isn't.
+    def combinations(n: Int, r: Int): Int = {
+      if (n < r) 0
+      else if (n == r) 1
+      else (factorial(n) / (factorial(r) * factorial(n-r))).toInt
+    }
+
+    val averageSubsetSize: Int = 
+      remainingSubsets.map(_.fSubset.size).sum / remainingSubsets.size
 
     def doSearchPartitionSize(psize: Int): Int = {
       val featsPairsCount = 
-        scala.math.pow(averageSubsetSize, psize) * remainingSubsets.size.toDouble / psize
+        if(averageSubsetSize == 1)
+          combinations(psize, 2) * remainingSubsets.size.toDouble / psize
+        else
+          scala.math.pow(averageSubsetSize, psize) * remainingSubsets.size.toDouble / psize
 
-      if (psize == remainingSubsets.size) 
-        psize
-      else if (featsPairsCount > initialFeatsPairsCount)
+      if (featsPairsCount > initialFeatsPairsCount)
         psize - 1
+      else if (psize == remainingSubsets.size) 
+        psize
       else 
         doSearchPartitionSize(psize + 1)
     }
