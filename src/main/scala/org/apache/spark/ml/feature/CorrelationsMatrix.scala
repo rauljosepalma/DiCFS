@@ -1,55 +1,47 @@
 package org.apache.spark.ml.feature
 
 import scala.math.round
-import scala.collection.mutable.HashMap
-import scala.collection.immutable.BitSet
+import scala.collection.mutable
 
 // nFeats includes class
-class CorrelationsMatrix(val nFeats: Int) {
+class CorrelationsMatrix(correlator: Correlator) {
 
-  val data = HashMap.empty[(Int,Int), Double]
+  private val data = mutable.Map.empty[(Int,Int), Double]
 
-  def apply(i:Int, j:Int): Double = {
-    
-    require(i != j, 
-      "Correlations of a feature with itself shouldn't be calculated")
-    
-    // Only pairs (i,j) where i < j are stored
-    if(i < j) data((i,j)) else data((j,i))
-  }
-
-  // Add new correlations to matrix
-  def update(newFeatsPairs: Seq[(Int,Int)], correlator: Correlator) = {
-    newFeatsPairs.foreach{ case(i,j) => 
-      require(i < j, "In a featPair(i,j) i must always be less than j")
-
-      data((i,j)) = correlator.correlate(i,j)
+  def precalcCorrs(pairs: Seq[(Int,Int)]): Unit = {
+    pairs.foreach{ case (i,j) =>
+      require(i < j, s"In a featPair(i=$i,j=$j) i must always be less than j")
     }
+    require(pairs.distinct.size == pairs.size, 
+      "All required pairs must be different")
+
+    val newPairs = pairs.filter(!data.contains(_))
+    // The hard work line!
+    val newPairsCorrs = 
+      if(!newPairs.isEmpty) correlator.correlate(newPairs)
+      else Seq.empty[Double]
+    // Update data
+    newPairs.zip(newPairsCorrs).foreach{ case(pair,corr) => data(pair) = corr }
   }
 
-  // Clean corrs not in remainingSubsets except corrs with class
-  def clean(remainingSubsets: Seq[EvaluatedFeaturesSubset]) = {
-    val remainingFeatsSet = 
-      remainingSubsets.map(_.fSubset.data).reduce(_ ++ _)
-    data.retain{ case ((iFeatA: Int, iFeatB: Int), _) =>
-      ((remainingFeatsSet.contains(iFeatA) && 
-        remainingFeatsSet.contains(iFeatB)) 
-        || iFeatB == nFeats)
-    } 
+  def apply(i: Int, j: Int): Double = data(i,j)
+  def apply(pair: (Int,Int)): Double = data(pair)
+  // Remove corrs not in pairs, pairs should include pairs with class
+  def clean(pairs: Seq[(Int,Int)]): CorrelationsMatrix = {
+    data.retain{ case (pair,_) => pairs.contains(pair) }
+    this
   }
 
-  def keys: Seq[(Int, Int)] = data.keysIterator.toSeq
-
-  def isEmpty: Boolean = data.isEmpty
+  def size: Int = data.size
 
   override def toString(): String =  {
-    this.keys.sorted
+    this.data.keys.toSeq.sorted
       .map{ pair => s"$pair = ${data(pair)}" }.mkString("\n")
   }
 
   // TODO TEMP
-  def toStringCorrsWithClass: String = {
-    (0 until nFeats).map( i=> s"${data((i, nFeats))}" ).mkString(",")
-  } 
+  // def toStringCorrsWithClass: String = {
+  //   (0 until nFeats).map( i=> s"${data((i, nFeats))}" ).mkString(",")
+  // } 
  
 }

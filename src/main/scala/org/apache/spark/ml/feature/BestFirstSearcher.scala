@@ -3,71 +3,87 @@ package org.apache.spark.ml.feature
 import scala.collection.mutable.ListBuffer
 
 // Implements an object capable of doing a greedy best first search
-class BestFirstSearcher[T](
-  initialState: EvaluableState[T],
-  evaluator: StateEvaluator[T],
-  maxFails: Int) extends Optimizer[T] {
+class BestFirstSearcher (
+  initialStates: Seq[EvaluableState],
+  evaluator: StateEvaluator,
+  maxFails: Int) extends Optimizer{
 
-  def search: EvaluatedState[T] = {
-    val evaluatedInitState = 
-      new EvaluatedState[T](initialState, evaluator.evaluate(initialState))
+  def search: Seq[EvaluatedState] = {
+    val evaluatedInitStates = evaluator.evaluate(initialStates)
+    val priorityLists = 
+      evaluatedInitStates.map{ (e: EvaluatedState) =>
+        new BestFirstSearchList(maxFails) += e
+      }
 
-    doSearch(
-      new BestFirstSearchList[T](maxFails) += evaluatedInitState, 
-      evaluatedInitState, 0)
+    doSearch(priorityLists, evaluatedInitStates, 
+      Seq.fill(initialStates.size)(0))
   }
 
   // The received queue must always have at least one element
   private def doSearch(
-    priorityList: BestFirstSearchList[T],
-    bestState: EvaluatedState[T],
-    nFails: Int): EvaluatedState[T] = {
+    priorityLists: Seq[BestFirstSearchList],
+    bestStates: Seq[EvaluatedState],
+    nsFails: Seq[Int]): Seq[EvaluatedState] = {
 
     // DEBUG
     // println("LIST: " + priorityList.toString)
     
-    // Remove head (best priority) and expand it
-    val head = priorityList.dequeue
-    // A collection of evaluated search states
-    // DEBUG
-    // println("HEAD:" + head.toString)
-    val newStates: Seq[EvaluatedState[T]] = 
-      (head
-        .state
-        .expand
-        .map(s => new EvaluatedState[T](s,evaluator.evaluate(s)))
-      )
-      
-    // Interestlingly enough, the search on WEKA accepts repeated elements on
-    // the list, so this behavior is copied here.
-    priorityList ++= newStates
-
-    if (priorityList.isEmpty) {
-      bestState
-    } else {
-      val bestNewState = priorityList.head
-      if (bestNewState.merit - bestState.merit > 0.00001) {
-        doSearch(priorityList, bestNewState, 0)
-      } else if (nFails < this.maxFails - 1) {
-        
-        // DEBUG
-        // println("FAIL++: " + (nFails + 1).toString)
-
-        doSearch(priorityList, bestState, nFails + 1)
-      } else {
-        bestState
+    // Remove head (best priority)
+    // A head can be None if list is empty (dequeOption) or if nFails
+    // has reached maximum
+    val heads: Seq[Option[EvaluatedState]] = 
+      priorityLists.zip(nsFails).map{ case (list, nFails) => 
+        if (nFails >= maxFails) None
+        else list.dequeueOption
       }
+
+    // Expand new states from heads
+    val newEvaluableStates: Seq[Option[Seq[EvaluableState]]] = 
+      heads.map(_.map(_.state.expand))
+    // The main objective of all this change is to evaluate
+    // all the needed states in a single call
+    evaluator.preEvaluate(newEvaluableStates.flatten.flatten)
+    // evaluated states are only obtained for existent evaluable states 
+    val newEvaluatedStates: Seq[Option[Seq[EvaluatedState]]] = 
+      newEvaluableStates.map(_.map(evaluator.evaluate(_)))
+
+    // Interestlingly enough, the search on WEKA accepts repeated elements on
+    // the list, so this behavior is copied here. 
+    priorityLists.zip(newEvaluatedStates)
+      .foreach{ 
+        case (list, Some(states)) => list ++= states 
+        case (_, None) => ; // do nothing
+      }
+    // End when all lists have empty state or have reached maximum fails
+    if(priorityLists.zip(nsFails)
+        .forall{ case (list, nFails) => list.isEmpty || nFails >= maxFails }){
+      bestStates
+    }else{
+      // Empty priorityLists will return None and bestState is kept
+      val (newBestStates, newNFails): (Seq[EvaluatedState],Seq[Int]) = 
+        (priorityLists.map(_.headOption), bestStates, nsFails).zipped.map{ 
+          case (Some(bestNewState), bestState: EvaluatedState, nFails: Int) =>
+            if(bestNewState.merit - bestState.merit > 0.00001)
+              (bestNewState, nFails)
+            else
+              (bestState, nFails + 1)
+          case (None, bestState: EvaluatedState, nFails: Int) =>
+            (bestState, nFails)
+        }.unzip
+
+      doSearch(priorityLists, newBestStates, newNFails)
     }
   }
+  
 }
 
-class BestFirstSearchList[T](capacity: Int) {
+class BestFirstSearchList(capacity: Int) {
 
   require(capacity > 0, "SearchList capacity must be greater than 0")
 
-  private val data = ListBuffer.empty[EvaluatedState[T]]
+  private val data = ListBuffer.empty[EvaluatedState]
 
-  def +=(ne: EvaluatedState[T]): BestFirstSearchList[T] = {
+  def +=(ne: EvaluatedState): BestFirstSearchList = {
     
     // If the list is full
     if (data.size == capacity) {
@@ -100,17 +116,24 @@ class BestFirstSearchList[T](capacity: Int) {
     return this
   }
 
-  def ++=(nes: Seq[EvaluatedState[T]]): Unit = {
+  def ++=(nes: Seq[EvaluatedState]): Unit = {
     nes.foreach{ ne => this += ne }
   }
 
-  def dequeue: EvaluatedState[T] = {
+  def dequeue: EvaluatedState = {
     val head = data.head
     data.trimStart(1)
     head
   }
 
-  def head: EvaluatedState[T] = data.head
+  def dequeueOption: Option[EvaluatedState] = {
+    if (!this.isEmpty) Some(dequeue)
+    else None
+  }
+
+  def head: EvaluatedState = data.head
+
+  def headOption: Option[EvaluatedState] = data.headOption
 
   def isEmpty: Boolean = data.isEmpty
 

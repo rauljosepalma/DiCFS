@@ -1,12 +1,9 @@
 package org.apache.spark.ml.feature
 
 import scala.math.sqrt
-import scala.collection.immutable.BitSet
 
-// The option parameters are needed because the evaluator can run on the driver
-// or on the workers.
-class CfsSubsetEvaluator(correlations: CorrelationsMatrix, iClass: Int)
-  extends StateEvaluator[BitSet] {
+class CfsSubsetEvaluator(corrs: CorrelationsMatrix, iClass: Int)
+  extends StateEvaluator {
 
   // TODO 
   // Caching was disabled since, in the case of distributed execution,
@@ -22,41 +19,61 @@ class CfsSubsetEvaluator(correlations: CorrelationsMatrix, iClass: Int)
 
   var numOfEvaluations = 0
 
+  override def preEvaluate(states: Seq[EvaluableState]): Unit = {
+    // TODO Run-time check was the only solution found
+    preEvaluateFS(states.map{ 
+        case s:FeaturesSubset => s 
+        case _ => throw new IllegalArgumentException
+      })
+  }
+  override def evaluate(states: Seq[EvaluableState]): Seq[EvaluatedState] = {
+    evaluateFS(states.map{ 
+        case s:FeaturesSubset => s 
+        case _ => throw new IllegalArgumentException
+      })
+  }
+
+
+  def preEvaluateFS(states: Seq[FeaturesSubset]): Unit = {
+    // Precalc all feats pairs (if needed) using corrs
+    val allPairs: Seq[(Int,Int)] = {
+      val allFeats: FeaturesSubset = states.reduce(_ ++ _)
+      val allFeatsWithClass: Seq[(Int,Int)] = 
+        allFeats.getPairsWithFeat(iClass)
+      val interFeatPairs: Seq[(Int,Int)] = 
+        states.flatMap(_.getInterFeatPairs).distinct
+
+      allFeatsWithClass ++ interFeatPairs
+    }
+    // The hard-work!
+    corrs.precalcCorrs(allPairs)
+  }
+
   // Evals a given subset of features
-  override def evaluate(state: EvaluableState[BitSet]): 
-    Double = {
+  // Empty states are assigned with 0 correlation
+  def evaluateFS(states: Seq[FeaturesSubset]): Seq[EvaluatedState] = {
 
-    val subset: BitSet = state.data
+    states.map{ state =>
+      
+      numOfEvaluations += 1
 
-    // if(cache.contains(subset)) {
-    //   cache(subset)
-    // } else {
+      val numerator = state.getPairsWithFeat(iClass).map(corrs(_)).sum
+      val interFeatCorrelations = state.getInterFeatPairs.map(corrs(_)).sum
+      val denominator = sqrt(state.size + 2.0 * interFeatCorrelations)
 
-    numOfEvaluations += 1
-
-    val numerator = subset.map(correlations(_,iClass)).sum
-    val interFeatCorrelations = 
-      subset.toSeq.combinations(2)
-        .map{ e => correlations(e(0), e(1)) }.sum
-
-    val denominator = sqrt(subset.size + 2.0 * interFeatCorrelations)
-
-    // Take care of aproximations problems
-    val merit = 
-      if (denominator == 0.0) {
-        0.0
-      } else {
-        if (numerator/denominator < 0.0) {
-          -numerator/denominator
+      // Take care of aproximations problems
+      val merit = 
+        if (denominator == 0.0) {
+          0.0
         } else {
-          numerator/denominator
+          if (numerator/denominator < 0.0) {
+            -numerator/denominator
+          } else {
+            numerator/denominator
+          }
         }
-      }
-      
-    // cache(subset) = merit
-      
-    merit
-    
-    // }
+        
+      new EvaluatedState(state, merit)
+    }
   }
 }

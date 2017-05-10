@@ -5,16 +5,10 @@ import org.apache.spark.SparkException
 import org.apache.spark.SparkConf
 import org.apache.spark.ml.linalg.Vectors
 import org.apache.spark.ml.linalg.Vector
-import org.apache.spark.sql.DataFrame
-import org.apache.spark.sql.Row
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.ml.attribute._
 import org.apache.spark.sql.types.{DoubleType, StructField, StructType}
-import org.apache.spark.util.CollectionAccumulator
 
-import scala.collection.immutable.BitSet
-import scala.collection.JavaConverters._
-import scala.util.{Failure, Success, Try}
 
 // import org.apache.spark.mllib.feature.MDLPDiscretizer
 import rauljosepalma.sparkmltools._
