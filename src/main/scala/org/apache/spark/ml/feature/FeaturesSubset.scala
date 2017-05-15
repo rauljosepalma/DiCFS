@@ -3,29 +3,31 @@ package org.apache.spark.ml.feature
 class FeaturesSubset(val feats: Seq[Int], domain: Seq[Int] = Seq()) 
   extends EvaluableState {
 
-  // def data: Seq[Int] = feats
-  // def data_= (d: Seq[Int]) { feats = d }
+  require(feats.distinct.size == feats.size, 
+    "A FeatureSubset cannot have repeated elements")
 
   // Returns a sequence of all possible new subsets with one more feat
-  override def expand: Seq[EvaluableState] = {
+  override def expand: Seq[FeaturesSubset] = {
     domain
       .filter { !this.feats.contains(_) } 
       .map { f => new FeaturesSubset(this.feats :+ f, domain) }
   }
 
-  def getPairsWithFeat(feat: Int): Seq[(Int, Int)] = 
-    this.feats.zip(Seq.fill(this.feats.size)(feat))
+  // iClass will always be greater than all feats
+  def getPairsWithClass(iClass: Int): Seq[(Int, Int)] = 
+    this.feats.zip(Seq.fill(this.feats.size)(iClass))
 
+  // Sorted makes sure that the resulting meets (i,j): i < j
   def getInterFeatPairs: Seq[(Int, Int)] = 
-    this.feats.combinations(2).toSeq.map(pair => (pair(0),pair(1)))
+    this.feats.sorted.combinations(2).toSeq.map(pair => (pair(0),pair(1)))
 
   // Descending sort
-  def sortedByCorrWithFeat(corrs: CorrelationsMatrix, feat: Int)
+  def sortedByCorrWithClass(corrs: CorrelationsMatrix, iClass: Int)
     : FeaturesSubset = {
-    corrs.precalcCorrs(this.getPairsWithFeat(feat))
+    corrs.precalcCorrs(this.getPairsWithClass(iClass))
     new FeaturesSubset( 
       this.feats.sorted(Ordering.by[Int, Double]{ f => 
-      corrs(f, feat) * -1.0
+      corrs(f, iClass) * -1.0
       })
     )   
   }
@@ -33,10 +35,13 @@ class FeaturesSubset(val feats: Seq[Int], domain: Seq[Int] = Seq())
   def apply(i: Int) = feats(i)
 
   def ++(fs: FeaturesSubset): FeaturesSubset =
-    new FeaturesSubset(this.feats ++ fs.feats)
+    new FeaturesSubset((this.feats ++ fs.feats).distinct)
 
   def +(i: Int): FeaturesSubset =
-    new FeaturesSubset(this.feats :+ i)
+    if (!this.contains(i))
+      new FeaturesSubset(this.feats :+ i)
+    else 
+      this
 
   def contains(i: Int) = feats.contains(i)
 
@@ -51,7 +56,7 @@ class FeaturesSubset(val feats: Seq[Int], domain: Seq[Int] = Seq())
   // Sequences are immutable
   def toSeq = feats
 
-  override def toString(): String =  feats.mkString(",") 
+  override def toString(): String =  feats.sorted.mkString(",") 
 
 }
 

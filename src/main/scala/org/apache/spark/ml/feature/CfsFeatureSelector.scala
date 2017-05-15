@@ -204,7 +204,7 @@ final class CFSSelector(override val uid: String)
     val corrs = new CorrelationsMatrix(correlator)
     val evaluator = new CfsSubsetEvaluator(corrs, iClass)
     val remainingSubset = 
-      new FeaturesSubset(Range(0, nFeats)).sortedByCorrWithFeat(corrs, iClass)
+      new FeaturesSubset(Range(0, nFeats)).sortedByCorrWithClass(corrs, iClass)
     // Initial max number of calculated corrs
     val initialMaxNCorrs = 
       calcMaxNumOfCorrs($(initPartitionSize), remainingSubset, nUsefulCorrs=0)
@@ -243,7 +243,7 @@ final class CFSSelector(override val uid: String)
 
         val nUsefulCorrs: Int = corrs.clean(
           remainingSubset.getInterFeatPairs ++ 
-          remainingSubset.getPairsWithFeat(iClass)
+          remainingSubset.getPairsWithClass(iClass)
         ).size
 
         findSubset(

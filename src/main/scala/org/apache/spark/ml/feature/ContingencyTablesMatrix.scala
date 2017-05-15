@@ -34,10 +34,6 @@ class ContingencyTable extends Serializable {
     // values
     val totalDistinctValues = distinctValuesCounts.map(_._2).sum
 
-    // TODO DELETE
-    // DEBUG
-    println(s"TOTAL DISTINCT VALUES = $totalDistinctValues")
-
     // Assuming that there are no missing values
     val entropy = distinctValuesCounts
       .map{ case (_, count) => count * log(count) }
@@ -82,6 +78,8 @@ class ContingencyTablesMatrix(remainingFeatsPairs: Seq[(Int,Int)])
 // to prevent the need of Serializing the whole CfsFeatureSelector class
 object ContingencyTablesMatrix {
 
+  var totalPairsEvaluated = 0
+
   // nFeats (must include the class) is needed only when precalcEntropies is
   // true.
   def apply(
@@ -90,6 +88,9 @@ object ContingencyTablesMatrix {
 
     require(!remainingFeatsPairs.isEmpty, 
       "Cannot create ContingencyTablesMatrix with empty remainingFeatsPairs collection")
+    // DEBUG
+    println(s"EVALUATING ${remainingFeatsPairs.size} PAIRS...")
+    totalPairsEvaluated += remainingFeatsPairs.size
 
     //DEBUG Read Matrix from disk
     // var ctmFound = false
@@ -114,7 +115,7 @@ object ContingencyTablesMatrix {
     def accumulator(matrix: ContingencyTablesMatrix, row: Row): ContingencyTablesMatrix = {
 
       val label = row(1).asInstanceOf[Double]
-      // Select only features included in partition. Label is the last feat
+      // Label is the last feat
       val features = row(0).asInstanceOf[Vector].toArray :+ label
 
       // Accumulate contingency tables counts

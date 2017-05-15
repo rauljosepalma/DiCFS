@@ -19,6 +19,7 @@ class CfsSubsetEvaluator(corrs: CorrelationsMatrix, iClass: Int)
 
   var numOfEvaluations = 0
 
+  // States are merged from different searches
   override def preEvaluate(states: Seq[EvaluableState]): Unit = {
     // TODO Run-time check was the only solution found
     preEvaluateFS(states.map{ 
@@ -34,32 +35,34 @@ class CfsSubsetEvaluator(corrs: CorrelationsMatrix, iClass: Int)
   }
 
 
-  def preEvaluateFS(states: Seq[FeaturesSubset]): Unit = {
+  def preEvaluateFS(subsets: Seq[FeaturesSubset]): Unit = {
     // Precalc all feats pairs (if needed) using corrs
-    val allPairs: Seq[(Int,Int)] = {
-      val allFeats: FeaturesSubset = states.reduce(_ ++ _)
-      val allFeatsWithClass: Seq[(Int,Int)] = 
-        allFeats.getPairsWithFeat(iClass)
-      val interFeatPairs: Seq[(Int,Int)] = 
-        states.flatMap(_.getInterFeatPairs).distinct
+    if(!subsets.isEmpty){
 
-      allFeatsWithClass ++ interFeatPairs
+      val allPairs: Seq[(Int,Int)] = {
+        val allFeatsWithClass:Seq[(Int,Int)] = 
+          (new FeaturesSubset(Range(0, iClass))).getPairsWithClass(iClass)
+        val interFeatPairs: Seq[(Int,Int)] = 
+          subsets.flatMap(_.getInterFeatPairs).distinct
+
+        allFeatsWithClass ++ interFeatPairs
+      }
+      // The hard-work!
+      corrs.precalcCorrs(allPairs)
     }
-    // The hard-work!
-    corrs.precalcCorrs(allPairs)
   }
 
   // Evals a given subset of features
   // Empty states are assigned with 0 correlation
-  def evaluateFS(states: Seq[FeaturesSubset]): Seq[EvaluatedState] = {
+  def evaluateFS(subsets: Seq[FeaturesSubset]): Seq[EvaluatedState] = {
 
-    states.map{ state =>
+    subsets.map{ subset =>
       
       numOfEvaluations += 1
 
-      val numerator = state.getPairsWithFeat(iClass).map(corrs(_)).sum
-      val interFeatCorrelations = state.getInterFeatPairs.map(corrs(_)).sum
-      val denominator = sqrt(state.size + 2.0 * interFeatCorrelations)
+      val numerator = subset.getPairsWithClass(iClass).map(corrs(_)).sum
+      val interFeatCorrelations = subset.getInterFeatPairs.map(corrs(_)).sum
+      val denominator = sqrt(subset.size + 2.0 * interFeatCorrelations)
 
       // Take care of aproximations problems
       val merit = 
@@ -73,7 +76,7 @@ class CfsSubsetEvaluator(corrs: CorrelationsMatrix, iClass: Int)
           }
         }
         
-      new EvaluatedState(state, merit)
+      new EvaluatedState(subset, merit)
     }
   }
 }

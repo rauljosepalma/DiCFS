@@ -26,8 +26,8 @@ object Main {
     sc.setLogLevel("WARN")
 
     import org.apache.spark.storage.StorageLevel    
-    val df = DataFrameIO.readDFFromAny(args(0))
-    // val df = DataFrameIO.readDFFromAny(args(0)).persist(StorageLevel.MEMORY_ONLY)
+    // val df = DataFrameIO.readDFFromAny(args(0))
+    val df = DataFrameIO.readDFFromAny(args(0)).persist(StorageLevel.MEMORY_ONLY)
     // ex.: hdfs://master:8020/datasets
     val dfPath = args(0).slice(0, args(0).lastIndexOf("/"))
     // ex.: ECBDL14_train
@@ -53,7 +53,9 @@ object Main {
     }
 
     val model = 
-        fSelector.fit(df.sample(withReplacement=false, fraction=sampleSize))
+      fSelector.fit(df.sample(withReplacement=false, fraction=sampleSize))
+
+    println(s"TOTAL NUM OF EVALUATED PAIRS=${ContingencyTablesMatrix.totalPairsEvaluated}")  
 
     // val feats: BitSet = 
     //   featureSelector.fit()

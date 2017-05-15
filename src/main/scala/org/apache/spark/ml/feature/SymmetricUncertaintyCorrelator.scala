@@ -22,7 +22,7 @@ class SymmetricUncertaintyCorrelator(rdd: RDD[Row], nFeats: Int)
   // Cache entropies
   // Since conditionalEntropies should be asked once, they are not stored to
   // prevent reserving memory that will be needed for the correlations matrix.
-  val entropies: Array[Double] = Array.fill(nFeats)(-1.0)
+  val entropies: Array[Double] = Array.fill(nFeats+1)(-1.0)
   // Assuming there are no missing values
   var nInstances: Int = _
 
@@ -44,8 +44,6 @@ class SymmetricUncertaintyCorrelator(rdd: RDD[Row], nFeats: Int)
     ((a == b) || ((a - b < SMALL) && (b - a < SMALL)))
   }
   
-  // def updateContingencyTablesMatrix(ctm: ContingencyTablesMatrix) = 
-  //   this.ctm = ctm
   override def correlate(pairs: Seq[(Int,Int)]): Seq[Double] = {
     
     // Hard work!
