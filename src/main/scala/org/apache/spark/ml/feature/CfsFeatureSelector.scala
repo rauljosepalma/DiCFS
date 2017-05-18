@@ -4,11 +4,12 @@ import org.apache.hadoop.fs.Path
 
 import org.apache.spark.annotation.Since
 import org.apache.spark.ml._
-import org.apache.spark.ml.attribute.{AttributeGroup, _}
+import org.apache.spark.ml.attribute._
 import org.apache.spark.ml.linalg.{Vector, VectorUDT,Vectors}
 import org.apache.spark.ml.param._
 import org.apache.spark.ml.param.shared._
 import org.apache.spark.ml.util._
+import org.apache.spark.storage.StorageLevel
 import org.apache.spark.sql._
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.{DoubleType, StructType}
@@ -100,10 +101,19 @@ final class CFSSelector(override val uid: String)
 
     transformSchema(informativeDS.schema, logging = true)
 
-    val selectedFeats: FeaturesSubset = doFit(informativeDS)
-      
-    val informativeAttrs: Array[Attribute] = AttributeGroup.fromStructField(
-      informativeDS.schema($(featuresCol))).attributes.get
+    validateMetadata(informativeDS.schema)
+
+    val informativeAttrs: Array[NominalAttribute] = 
+      AttributeGroup.fromStructField(informativeDS.schema($(featuresCol)))
+        .attributes.get.map(_.asInstanceOf[NominalAttribute])
+    val labelAttr: NominalAttribute = 
+      Attribute.fromStructField(informativeDS.schema($(labelCol)))
+        .asInstanceOf[NominalAttribute]
+    val attrsSizes: IndexedSeq[Int] = informativeAttrs.map(_.values.get.size) :+ labelAttr.values.get.size
+
+    val rdd = dsToByteRDD(informativeDS).persist(StorageLevel.MEMORY_ONLY)
+
+    val selectedFeats: FeaturesSubset = doFit(rdd, attrsSizes)
 
     val selectedFeatsNames: Array[String] = 
       selectedFeats.map(informativeAttrs(_).name.get).toArray
@@ -121,7 +131,8 @@ final class CFSSelector(override val uid: String)
 
   override def transformSchema(schema: StructType): StructType = {
 
-    val nFeats = AttributeGroup.fromStructField(schema($(featuresCol))).size
+    val ag = AttributeGroup.fromStructField(schema($(featuresCol)))
+    val nFeats = ag.size
 
     // TODO DEBUG
     require(
@@ -133,20 +144,43 @@ final class CFSSelector(override val uid: String)
     SchemaUtils.checkColumnType(schema, $(featuresCol), new VectorUDT)
     SchemaUtils.checkNumericType(schema, $(labelCol))
     SchemaUtils.appendColumn(schema, $(outputCol), new VectorUDT)
+
   }
 
   override def copy(extra: ParamMap): CFSSelector = defaultCopy(extra)
 
-  // DEBUG
+  private def validateMetadata(schema: StructType): Unit = {
+    val ag = AttributeGroup.fromStructField(schema($(featuresCol)))
+    val nFeats = ag.size
+    val labelAttr = Attribute.fromStructField(schema($(labelCol)))
+
+    val allAttrs: Array[Attribute] = 
+      ag.attributes.getOrElse(throw new IllegalArgumentException("Dataset  must contain metadata for each feature and label")) :+ labelAttr
+    allAttrs.foreach{ attr => 
+      require(attr.isNominal, "All features and label must represent nominal attributes in metadata")
+      require(!attr.name.isEmpty, "All features and label must have a name in metadata")
+      val nomAttr = attr.asInstanceOf[NominalAttribute]
+      require(!nomAttr.values.isEmpty && nomAttr.values.size <= 255, 
+       "All features and label must have a maximum of 255 different values in metadata")
+    }
+  }
+
+  private def dsToByteRDD(dataset: Dataset[_]): RDD[Array[Byte]] = {
+    // dataset.select(col($(featuresCol)), col($(labelCol)).cast(DoubleType)).rdd
+
+    dataset.select(col($(featuresCol)), col($(labelCol)))
+      .rdd.map{ row: Row =>
+        row(0).asInstanceOf[Vector].toArray.map{ value: Double =>
+          require(value >= 0.0 && value <= 255.0 && value.isWhole, "Dataset must only contain whole values between 0 and 255 inclusively. A value of $value was found.")
+          value.toByte
+        } :+ row(1).asInstanceOf[Double].toByte
+      }
+  }
+
   private def filterNonInformativeFeats(dataset: Dataset[_]): Dataset[_] = {
     val ag = AttributeGroup.fromStructField(dataset.schema($(featuresCol)))
     val attrs: Array[Attribute] = ag.attributes.get
     
-    attrs.foreach{ attr => 
-      require(attr.isNominal, "All features must represent nominal attributes in metadata")
-      require(attr.name != None, "All features must have a name in metadata")
-    }
-
     // Non informative feats contain a single value
     val informativeFeatsIndexes: Array[Int] = { attrs
       .zipWithIndex
@@ -163,7 +197,8 @@ final class CFSSelector(override val uid: String)
     
     if(nNonInformativeFeats > 0) {
 
-      print(s"$nNonInformativeFeats feature(s) with a single value will not be considered")
+      // DEBUG
+      println(s"$nNonInformativeFeats feature(s) with a single value will not be considered")
 
       val informativeFeatsUDF = udf{ (features: Vector) => 
         Vectors.dense(
@@ -186,25 +221,30 @@ final class CFSSelector(override val uid: String)
     }
   }
 
-  // Searches a subset of features given the data
-  // dataset DataFrame must be discretized
-  // If $(initPartitionSize) == nFeats in dataset, then no partitioning is perfomed
-  private def doFit(dataset: Dataset[_]): FeaturesSubset = {
+  // attrsSize must contain the number of diferente values of all feats
+  // including the class 
+  // If $(initPartitionSize) == nFeats in dataset, then no
+  // partitioning is perfomed
+  private def doFit(rdd: RDD[Array[Byte]], attrsSizes: IndexedSeq[Int])
+    : FeaturesSubset = {
 
-    val nFeats = 
-      AttributeGroup.fromStructField(dataset.schema($(featuresCol))).size 
+    val nFeats = attrsSizes.size - 1
     // By convention it is considered that class is stored after the last
     // feature in the correlations matrix
     val iClass = nFeats
     
     if($(initPartitionSize) == 0) setInitPartitionSize(nFeats)
 
-    val correlator = 
-      new SymmetricUncertaintyCorrelator(dsToRDD(dataset), nFeats)
+    val correlator = new SUCorrelator(rdd, attrsSizes)
     val corrs = new CorrelationsMatrix(correlator)
     val evaluator = new CfsSubsetEvaluator(corrs, iClass)
-    val remainingSubset = 
-      new FeaturesSubset(Range(0, nFeats)).sortedByCorrWithClass(corrs, iClass)
+    val remainingSubset = new FeaturesSubset(Range(0, nFeats))
+    // TODO Test which is better:
+      // new FeaturesSubset(Range(0, nFeats)).sortedByCorrWithClass(corrs, iClass)
+      // new FeaturesSubset(Range(0, nFeats)).sortedRandom(corrs, iClass)
+    // DEBUG
+    println("CORRS WITH CLASS= ")
+    println(corrs)
     // Initial max number of calculated corrs
     val initialMaxNCorrs = 
       calcMaxNumOfCorrs($(initPartitionSize), remainingSubset, nUsefulCorrs=0)
@@ -217,7 +257,7 @@ final class CFSSelector(override val uid: String)
 
       // remainingSubsets: Seq[EvaluatedFeaturesSubset], 
       // correlations: CorrelationsMatrix,
-      // correlator: SymmetricUncertaintyCorrelator,
+      // correlator: SUCorrelator,
       // initialFeatsPairsCount: Int=0): FeaturesSubset = {
 
       val partitions: Seq[FeaturesSubset] = 
@@ -228,10 +268,6 @@ final class CFSSelector(override val uid: String)
         findAndMergeSubsetsInPartitions(
           partitions, evaluator, $(searchTermination))
 
-      // TODO
-      // Clean unneeded correlations (keep corrs with class)
-      // correlations.clean(newRemainingSubset)
-
       //DEBUG
       println(s"NUMBER OF EVALUATIONS = ${evaluator.numOfEvaluations}")
       println(s"FOUND ${newRemainingSubset.size} REMAINING FEATS = \n${newRemainingSubset}")
@@ -241,6 +277,7 @@ final class CFSSelector(override val uid: String)
       // case will be always reached 
       if(partitions.size != 1){
 
+        // Remove non-useful corrs from corrs matrix
         val nUsefulCorrs: Int = corrs.clean(
           remainingSubset.getInterFeatPairs ++ 
           remainingSubset.getPairsWithClass(iClass)
@@ -255,6 +292,10 @@ final class CFSSelector(override val uid: String)
           initialMaxNCorrs)
 
       } else {
+
+        // DEBUG
+        println(s"TOTAL NUM OF EVALUATED PAIRS=${correlator.totalPairsEvaluated}")  
+
         // Add locally predictive feats if requested
         if (!$(locallyPredictive))
           newRemainingSubset
@@ -296,51 +337,6 @@ final class CFSSelector(override val uid: String)
     partitions.map(new FeaturesSubset(_))
   }
 
-  // TODO make a diagram of this method!!!
-  // remainingSubsets must be sorted from greatest to least
-  // private def getStratifiedPartitions(
-  //   partitionSize: Int, 
-  //   remainingSubsets: Seq[EvaluatedFeaturesSubset])
-  //   : Seq[Seq[FeaturesSubset]] = {
-    
-  //   // Put subsets in a sigle partition
-  //   if(partitionSize >= remainingSubsets.size) {
-  //     Seq(remainingSubsets.map(_.fSubset))
-  //   } else {
-
-  //     // Slices refer to the division in original sorted subsets
-  //     // nPartitions represent also te size of each slice
-  //     val nPartitions = remainingSubsets.size / partitionSize
-  //     val nFirstSlices = partitionSize
-  //     val firtSlices: Seq[Seq[FeaturesSubset]] = 
-  //       (0 until nFirstSlices).map{ i =>
-  //         Range(i * nPartitions, (i+1) * nPartitions)
-  //           .map(remainingSubsets.map(_.fSubset))
-  //       }
-  //     val lastSlice: Seq[FeaturesSubset] = 
-  //       Range(nFirstSlices * nPartitions, remainingSubsets.size)
-  //         .map(remainingSubsets.map(_.fSubset))
-
-  //     // Partitions are the definitive result
-  //     val firstPartitions: Seq[Seq[FeaturesSubset]] = 
-  //       (0 until nPartitions).map{ i =>
-  //         firtSlices.map(_(i))
-  //     }
-  //     // add last slice elements to first partitions
-  //     val completePartitions: Seq[Seq[FeaturesSubset]] = 
-  //       firstPartitions.zipWithIndex.map{ 
-  //         case (partition, idx) =>
-  //           if (idx < lastSlice.size)
-  //             partition :+ lastSlice(idx)
-  //           else
-  //             partition
-  //       }
-
-  //     completePartitions
-  //   }
-
-  // }
-
   private def getAdjustedPartitionSize(
     currentPartitionSize: Int,
     remainingSubset: FeaturesSubset,
@@ -361,7 +357,7 @@ final class CFSSelector(override val uid: String)
     doSearchPartitionSize(currentPartitionSize + 1)
   }
 
-  // Calculate the max number of corrs to be calculated with the actual
+  // Obtain the max number of corrs to be calculated with the actual
   // remainingSubset and a particular partitionSize.
   // nUsefulCorrs represets the amount of already calculated corrs that are
   // useful for the actual remainingSubset
@@ -455,70 +451,6 @@ final class CFSSelector(override val uid: String)
     doAddFeats(selectedSubset, orderedCandFeats)
   }
 
-  private def dsToRDD(dataset: Dataset[_]): RDD[Row] = {
-    dataset.select(col($(featuresCol)), col($(labelCol)).cast(DoubleType)).rdd
-  }
-
-  // private def getAdjustedPartitionSize(
-  //   initialFeatsPairsCount: Int,
-  //   remainingSubsets: Seq[EvaluatedFeaturesSubset]): Int = {
-
-  //   def factorial(n:BigInt):BigInt = {
-  //     require(n >= 0, "factorial of negatives is undefined")
-  //     def doFactorial(n:BigInt,result:BigInt):BigInt = 
-  //       if (n==0) result else doFactorial(n-1,n*result)
-  //     doFactorial(n,1)
-  //   }
-  //   // TODO n = 50K is supported, 75K isn't.
-  //   def combinations(n: Int, r: Int): Int = {
-  //     if (n < r) 0
-  //     else if (n == r) 1
-  //     else (factorial(n) / (factorial(r) * factorial(n-r))).toInt
-  //   }
-
-  //   val averageSubsetSize: Int = 
-  //     remainingSubsets.map(_.fSubset.size).sum / remainingSubsets.size
-
-  //   def doSearchPartitionSize(psize: Int): Int = {
-  //     val featsPairsCount = 
-  //       if(averageSubsetSize == 1)
-  //         combinations(psize, 2) * remainingSubsets.size.toDouble / psize
-  //       else
-  //         scala.math.pow(averageSubsetSize, psize) * remainingSubsets.size.toDouble / psize
-
-  //     if (featsPairsCount > initialFeatsPairsCount)
-  //       psize - 1
-  //     else if (psize == remainingSubsets.size) 
-  //       psize
-  //     else 
-  //       doSearchPartitionSize(psize + 1)
-  //   }
-
-  //   doSearchPartitionSize(2)
-
-  // }
-
-  // // Feats pairs whose correlations have not been evaluated, 
-  // // Its important to keep (i,j), where i < j
-  // private def getRemainingFeatsPairs(
-  //   partitions: Seq[Seq[FeaturesSubset]]): Seq[(Int, Int)] = {
-
-  //   partitions.flatMap{ partition =>
-
-  //     val mergedPartition: Seq[Int] = 
-  //       partition.map(_.data).reduce(_ ++ _).toSeq
-
-  //     val mergedPartitionFeatsPairs: Seq[(Int, Int)] = 
-  //       mergedPartition.combinations(2).toSeq.map(p => (p(0),p(1)))
-
-  //     val calculatedFeatsPairs: Seq[(Int,Int)] = partition.flatMap{
-  //       _.data.toSeq.combinations(2).toSeq.map(p => (p(0),p(1)))
-  //     }
-
-  //     mergedPartitionFeatsPairs.diff(calculatedFeatsPairs)
-
-  //   }
-  // }
 }
 
 object CFSSelector extends DefaultParamsReadable[CFSSelector] {

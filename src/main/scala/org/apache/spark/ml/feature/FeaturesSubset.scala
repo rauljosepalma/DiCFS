@@ -1,5 +1,7 @@
 package org.apache.spark.ml.feature
 
+import scala.util.Random
+
 class FeaturesSubset(val feats: Seq[Int], domain: Seq[Int] = Seq()) 
   extends EvaluableState {
 
@@ -31,6 +33,8 @@ class FeaturesSubset(val feats: Seq[Int], domain: Seq[Int] = Seq())
       })
     )   
   }
+
+  def sortedRandom = new FeaturesSubset(Random.shuffle(this.feats))
 
   def apply(i: Int) = feats(i)
 
