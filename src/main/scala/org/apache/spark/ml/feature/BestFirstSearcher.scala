@@ -37,6 +37,10 @@ class BestFirstSearcher (
         else list.dequeueOption
       }
 
+    // DEBUG
+    println("CURRENT HEADS:")
+    println(heads.flatten.mkString("\n"))
+
     // Expand new states from heads
     val newEvaluableStates: Seq[Option[Seq[EvaluableState]]] = 
       heads.map(_.map(_.state.expand))
@@ -47,7 +51,7 @@ class BestFirstSearcher (
     val newEvaluatedStates: Seq[Option[Seq[EvaluatedState]]] = 
       newEvaluableStates.map(_.map(evaluator.evaluate(_)))
 
-    // Interestlingly enough, the search on WEKA accepts repeated elements on
+    // Interestingly enough, the search on WEKA accepts repeated elements on
     // the list, so this behavior is copied here. 
     priorityLists.zip(newEvaluatedStates)
       .foreach{ 

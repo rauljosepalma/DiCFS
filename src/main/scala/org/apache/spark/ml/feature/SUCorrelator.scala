@@ -64,29 +64,31 @@ class SUCorrelator(
       "Cannot create ContingencyTables with empty pairs collection")
 
     // DEBUG
-    println(s"EVALUATING ${pairs.size} PAIRS...")
+    println(s"EVALUATING ${pairs.size} PAIRS:")
+    println(pairs.mkString(","))
+    // val difFeats = t.flatMap(p => Seq(p._1,p._2)).distinct.size
     totalPairsEvaluated += pairs.size
 
     // Hard work!
     calculateCTables(pairs)
     
-    // if(entropies.isEmpty) {
-    //   entropies = calculateEntropies
-    //   // DEBUG
-    //   // println("ENTROPIES = ")
-    //   // println(entropies.mkString("\n"))
-    // }
-    // // TODO test if this is better than calculating entropies again
-    // val bEntropies = ctables.context.broadcast(entropies)
+    if(entropies.isEmpty) {
+      entropies = calculateEntropies
+      // DEBUG
+      // println("ENTROPIES = ")
+      // println(entropies.mkString("\n"))
+    }
+    // TODO test if this is better than calculating entropies again
+    val bEntropies = ctables.context.broadcast(entropies)
     
     ctables.map{ case ((i,j), ct) => 
 
-      val entropyI = ct.rowsEntropy
-      val entropyJ = ct.colsEntropy
-      val infoGain = entropyI - ct.condEntropy(entropyJ) 
-      val denom = entropyI + entropyJ
-      // val infoGain = bEntropies.value(i) - ct.condEntropy(bEntropies.value(j)) 
-      // val denom = bEntropies.value(i) + bEntropies.value(j)
+      // val entropyI = ct.rowsEntropy
+      // val entropyJ = ct.colsEntropy
+      // val infoGain = entropyI - ct.condEntropy(entropyJ) 
+      // val denom = entropyI + entropyJ
+      val infoGain = bEntropies.value(i) - ct.condEntropy(bEntropies.value(j)) 
+      val denom = bEntropies.value(i) + bEntropies.value(j)
       
       // Two feats with a single value will have both zero entropies
       // and consecuently a denom == 0

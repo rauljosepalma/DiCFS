@@ -115,6 +115,8 @@ final class CFSSelector(override val uid: String)
 
     val selectedFeats: FeaturesSubset = doFit(rdd, attrsSizes)
 
+    rdd.unpersist()
+
     val selectedFeatsNames: Array[String] = 
       selectedFeats.map(informativeAttrs(_).name.get).toArray
 
