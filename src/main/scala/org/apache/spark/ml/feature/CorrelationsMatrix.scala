@@ -3,35 +3,53 @@ package org.apache.spark.ml.feature
 import scala.math.round
 import scala.collection.mutable
 
-// nFeats includes class
 class CorrelationsMatrix(correlator: Correlator) {
 
   private val corrs = mutable.Map.empty[(Int,Int), Double]
+  
+  def precalcCorrs(iFixedFeat: Int, iPartners: Seq[Int]): Unit = {
 
-  def precalcCorrs(pairs: Seq[(Int,Int)]): Unit = {
-    pairs.foreach{ case (i,j) =>
-      require(i < j, s"In a featPair(i=$i,j=$j) i must always be less than j")
+    // In the case a of feature that was evaluated and expanded and then not
+    // added (causing a fail), it is possible that some of the iPartners sent
+    // have already been evaluated. However, test showed that filtering the
+    // list takes more than processing it as is.
+    // val filteredPartners = iPartners.filter{ iPartner => 
+    //   val (smaller, larger) = 
+    //     if (iFixedFeat < iPartner) (iFixedFeat, iPartner) else (iPartner, iFixedFeat)
+      
+    //   !corrs.contains(smaller, larger) 
+    // }
+
+    if(!iPartners.isEmpty){
+    // if(!filteredPartners.isEmpty){
+
+      // The hard work line!
+      val newCorrs: Seq[Double] = correlator.correlate(iFixedFeat, iPartners)
+        // correlator.correlate(iFixedFeat, filteredPartners)
+        
+      // Update corrs
+      iPartners.zip(newCorrs).foreach{ case (iPartner, corr) => 
+        this(iPartner, iFixedFeat) = corr
+      }
     }
-    require(pairs.distinct.size == pairs.size, 
-      "All required pairs must be different")
-
-    val newPairs = pairs.filter(!corrs.contains(_))
-    // The hard work line!
-    val newPairsCorrs: Map[(Int,Int), Double] = 
-      if(!newPairs.isEmpty) correlator.correlate(newPairs)
-      else Map.empty[(Int,Int), Double] 
-    // Update corrs
-    newPairsCorrs.foreach{ case (pair,corr) => corrs(pair)=corr }
   }
 
-  def apply(i: Int, j: Int): Double = corrs(i,j)
-  def apply(pair: (Int,Int)): Double = corrs(pair)
-  // Remove corrs not in pairs, pairs should include pairs with class
-  def clean(pairs: Seq[(Int,Int)]): CorrelationsMatrix = {
-    corrs.retain{ case (pair,_) => pairs.contains(pair) }
-    this
+  def apply(i: Int, j: Int): Double = {
+    val key: (Int, Int) = if (i < j) (i,j) else (j,i)
+    corrs(key)
   }
 
+  def apply(pair: (Int,Int)): Double = {
+    val key: (Int, Int) = if (pair._1 < pair._2) pair else pair.swap
+    corrs(key)
+  }
+
+  def update(i: Int, j: Int, value: Double): Unit = {
+    val key: (Int, Int) = if (i < j) (i,j) else (j,i)
+    corrs(key) = value
+  }
+
+  
   def size: Int = corrs.size
 
   override def toString(): String =  {

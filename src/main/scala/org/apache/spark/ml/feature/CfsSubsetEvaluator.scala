@@ -27,56 +27,58 @@ class CfsSubsetEvaluator(corrs: CorrelationsMatrix, iClass: Int)
         case _ => throw new IllegalArgumentException
       })
   }
-  override def evaluate(states: Seq[EvaluableState]): Seq[EvaluatedState] = {
-    evaluateFS(states.map{ 
-        case s:FeaturesSubset => s 
-        case _ => throw new IllegalArgumentException
-      })
+  override def evaluate(state: EvaluableState): EvaluatedState = {
+    // TODO Run-time check was the only solution found
+    evaluateFS(state.asInstanceOf[FeaturesSubset])
   }
 
-
+  // This method prefills the corrs matrix before the evaluation.
+  // It leverages the following facts:
+  // - All subsets have the same size
+  // - Any subset contains on its penultimate element the newest feature added
+  // - Only correlations between the newest feature and the features in the
+  //   last position (added by expand) COULD BE missing in corrs matrix.
+  // - In the case of feature that was evaluated and expanded and then not 
+  //   added (causing a fail), it is possible that some of the partners sent
+  //   have already been evaluated.
   def preEvaluateFS(subsets: Seq[FeaturesSubset]): Unit = {
-    // Precalc all feats pairs (if needed) using corrs
-    if(!subsets.isEmpty){
 
-      val allPairs: Seq[(Int,Int)] = {
-        val allFeatsWithClass:Seq[(Int,Int)] = 
-          (new FeaturesSubset(Range(0, iClass))).getPairsWithClass(iClass)
-        val interFeatPairs: Seq[(Int,Int)] = 
-          subsets.flatMap(_.getInterFeatPairs).distinct
-
-        allFeatsWithClass ++ interFeatPairs
+    val (iFeat, partners): (Int, Seq[Int]) = 
+      if(subsets.head.size > 1) {
+        (subsets.head.getPenultimateFeat, subsets.map(_.getLastFeat))
+      // The first time, when the subsets contain all single features
+      // they must be compared with the class
+      } else {
+        (iClass, Range(0, iClass))
       }
-      // The hard-work!
-      corrs.precalcCorrs(allPairs)
-    }
+
+    // The hard work!
+    corrs.precalcCorrs(iFeat, partners)
+      
   }
 
   // Evals a given subset of features
   // Empty states are assigned with 0 correlation
-  def evaluateFS(subsets: Seq[FeaturesSubset]): Seq[EvaluatedState] = {
-
-    subsets.map{ subset =>
+  def evaluateFS(subset: FeaturesSubset): EvaluatedState = {
       
-      numOfEvaluations += 1
+    numOfEvaluations += 1
 
-      val numerator = subset.getPairsWithClass(iClass).map(corrs(_)).sum
-      val interFeatCorrelations = subset.getInterFeatPairs.map(corrs(_)).sum
-      val denominator = sqrt(subset.size + 2.0 * interFeatCorrelations)
+    val numerator = subset.getPairsWithClass(iClass).map(corrs(_)).sum
+    val interFeatCorrelations = subset.getInterFeatPairs.map(corrs(_)).sum
+    val denominator = sqrt(subset.size + 2.0 * interFeatCorrelations)
 
-      // Take care of aproximations problems
-      val merit = 
-        if (denominator == 0.0) {
-          0.0
+    // Take care of aproximations problems
+    val merit = 
+      if (denominator == 0.0) {
+        0.0
+      } else {
+        if (numerator/denominator < 0.0) {
+          -numerator/denominator
         } else {
-          if (numerator/denominator < 0.0) {
-            -numerator/denominator
-          } else {
-            numerator/denominator
-          }
+          numerator/denominator
         }
-        
-      new EvaluatedState(subset, merit)
-    }
+      }
+      
+    new EvaluatedState(subset, merit)
   }
 }

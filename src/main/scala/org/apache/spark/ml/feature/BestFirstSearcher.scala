@@ -3,82 +3,66 @@ package org.apache.spark.ml.feature
 import scala.collection.mutable.ListBuffer
 
 // Implements an object capable of doing a greedy best first search
-class BestFirstSearcher (
-  initialStates: Seq[EvaluableState],
+class BestFirstSearcher(
+  initialState: EvaluableState,
   evaluator: StateEvaluator,
-  maxFails: Int) extends Optimizer{
+  maxFails: Int) extends Optimizer {
 
-  def search: Seq[EvaluatedState] = {
-    val evaluatedInitStates = evaluator.evaluate(initialStates)
-    val priorityLists = 
-      evaluatedInitStates.map{ (e: EvaluatedState) =>
-        new BestFirstSearchList(maxFails) += e
-      }
+  def search: EvaluatedState = {
+    val evaluatedInitState = evaluator.evaluate(initialState)
 
-    doSearch(priorityLists, evaluatedInitStates, 
-      Seq.fill(initialStates.size)(0))
+    doSearch(
+      new BestFirstSearchList(maxFails) += evaluatedInitState, 
+      evaluatedInitState, 0)
   }
 
   // The received queue must always have at least one element
   private def doSearch(
-    priorityLists: Seq[BestFirstSearchList],
-    bestStates: Seq[EvaluatedState],
-    nsFails: Seq[Int]): Seq[EvaluatedState] = {
+    priorityList: BestFirstSearchList,
+    bestState: EvaluatedState,
+    nFails: Int): EvaluatedState = {
 
-    // DEBUG
-    // println("LIST: " + priorityList.toString)
+    // Remove head (best priority) and expand it
+    val head = priorityList.dequeue
     
-    // Remove head (best priority)
-    // A head can be None if list is empty (dequeOption) or if nFails
-    // has reached maximum
-    val heads: Seq[Option[EvaluatedState]] = 
-      priorityLists.zip(nsFails).map{ case (list, nFails) => 
-        if (nFails >= maxFails) None
-        else list.dequeueOption
-      }
-
     // DEBUG
-    println("CURRENT HEADS:")
-    println(heads.flatten.mkString("\n"))
+    // println(s"BEST STATE = {${bestState.state.toString}}")
+    // println(s"BEST MERIT = ${bestState.merit}")
+    // println(s"HEAD       = {${head.state.toString}}")
 
-    // Expand new states from heads
-    val newEvaluableStates: Seq[Option[Seq[EvaluableState]]] = 
-      heads.map(_.map(_.state.expand))
-    // The main objective of all this change is to evaluate
-    // all the needed states in a single call
-    evaluator.preEvaluate(newEvaluableStates.flatten.flatten)
-    // evaluated states are only obtained for existent evaluable states 
-    val newEvaluatedStates: Seq[Option[Seq[EvaluatedState]]] = 
-      newEvaluableStates.map(_.map(evaluator.evaluate(_)))
+    // A collection of evaluated search states
+    val newStates: Seq[EvaluableState] = head.state.expand
 
-    // Interestingly enough, the search on WEKA accepts repeated elements on
-    // the list, so this behavior is copied here. 
-    priorityLists.zip(newEvaluatedStates)
-      .foreach{ 
-        case (list, Some(states)) => list ++= states 
-        case (_, None) => ; // do nothing
+    // The hard-work!    
+    evaluator.preEvaluate(newStates)
+
+    val newEvaluatedStates: Seq[EvaluatedState] = 
+      newStates.map(evaluator.evaluate(_))
+      
+    // Interestlingly enough, the search on WEKA accepts repeated elements on
+    // the list, so this behavior is copied here.
+    priorityList ++= newEvaluatedStates
+
+    if (priorityList.isEmpty) {
+      // DEBUG
+      println("EMPTY LIST!")
+
+      bestState
+    } else {
+      val bestNewState = priorityList.head
+      if (bestNewState.merit - bestState.merit > 0.00001) {
+        doSearch(priorityList, bestNewState, 0)
+      } else if (nFails < this.maxFails - 1) {
+        
+        // DEBUG
+        println("FAIL++: " + (nFails + 1).toString)
+
+        doSearch(priorityList, bestState, nFails + 1)
+      } else {
+        bestState
       }
-    // End when all lists have empty state or have reached maximum fails
-    if(priorityLists.zip(nsFails)
-        .forall{ case (list, nFails) => list.isEmpty || nFails >= maxFails }){
-      bestStates
-    }else{
-      // Empty priorityLists will return None and bestState is kept
-      val (newBestStates, newNFails): (Seq[EvaluatedState],Seq[Int]) = 
-        (priorityLists.map(_.headOption), bestStates, nsFails).zipped.map{ 
-          case (Some(bestNewState), bestState: EvaluatedState, nFails: Int) =>
-            if(bestNewState.merit - bestState.merit > 0.00001)
-              (bestNewState, nFails)
-            else
-              (bestState, nFails + 1)
-          case (None, bestState: EvaluatedState, nFails: Int) =>
-            (bestState, nFails)
-        }.unzip
-
-      doSearch(priorityLists, newBestStates, newNFails)
     }
   }
-  
 }
 
 class BestFirstSearchList(capacity: Int) {
@@ -130,14 +114,7 @@ class BestFirstSearchList(capacity: Int) {
     head
   }
 
-  def dequeueOption: Option[EvaluatedState] = {
-    if (!this.isEmpty) Some(dequeue)
-    else None
-  }
-
   def head: EvaluatedState = data.head
-
-  def headOption: Option[EvaluatedState] = data.headOption
 
   def isEmpty: Boolean = data.isEmpty
 

@@ -2,7 +2,7 @@ package org.apache.spark.ml.feature
 
 import scala.util.Random
 
-class FeaturesSubset(val feats: Seq[Int], domain: Seq[Int] = Seq()) 
+class FeaturesSubset(val feats: IndexedSeq[Int], domain: Seq[Int] = Seq()) 
   extends EvaluableState {
 
   require(feats.distinct.size == feats.size, 
@@ -23,23 +23,7 @@ class FeaturesSubset(val feats: Seq[Int], domain: Seq[Int] = Seq())
   def getInterFeatPairs: Seq[(Int, Int)] = 
     this.feats.sorted.combinations(2).toSeq.map(pair => (pair(0),pair(1)))
 
-  // Descending sort
-  def sortedByCorrWithClass(corrs: CorrelationsMatrix, iClass: Int)
-    : FeaturesSubset = {
-    corrs.precalcCorrs(this.getPairsWithClass(iClass))
-    new FeaturesSubset( 
-      this.feats.sorted(Ordering.by[Int, Double]{ f => 
-      corrs(f, iClass) * -1.0
-      })
-    )   
-  }
-
-  def sortedRandom = new FeaturesSubset(Random.shuffle(this.feats))
-
   def apply(i: Int) = feats(i)
-
-  def ++(fs: FeaturesSubset): FeaturesSubset =
-    new FeaturesSubset((this.feats ++ fs.feats).distinct)
 
   def +(i: Int): FeaturesSubset =
     if (!this.contains(i))
@@ -47,12 +31,23 @@ class FeaturesSubset(val feats: Seq[Int], domain: Seq[Int] = Seq())
     else 
       this
 
+  def getLastFeat: Int = {
+    require(!this.isEmpty,  "Cannot getLastFeat from empty subset")
+    feats.last
+  }
+
+  def getPenultimateFeat: Int = {
+    require(feats.size > 1, 
+      "Cannot getPenultimateFeat from subset with less than two elements")
+    feats(feats.size - 2)
+  }
+
   def contains(i: Int) = feats.contains(i)
 
   def filter(p: (Int) => Boolean): FeaturesSubset =
     new FeaturesSubset(feats.filter(p))
 
-  def map[B](f: (Int) => B): Seq[B] = feats.map(f)
+  def map[B](f: (Int) => B): IndexedSeq[B] = feats.map(f)
   
   def size: Int = feats.size
 
@@ -60,7 +55,7 @@ class FeaturesSubset(val feats: Seq[Int], domain: Seq[Int] = Seq())
   // Sequences are immutable
   def toSeq = feats
 
-  override def toString(): String =  feats.sorted.mkString(",") 
+  override def toString(): String =  feats.sorted.mkString(", ") 
 
 }
 
