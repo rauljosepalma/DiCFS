@@ -6,22 +6,18 @@ import scala.collection.mutable
 class CorrelationsMatrix(correlator: Correlator) {
 
   private val corrs = mutable.Map.empty[(Int,Int), Double]
-  
+
   def precalcCorrs(iFixedFeat: Int, iPartners: Seq[Int]): Unit = {
 
     // In the case a of feature that was evaluated and expanded and then not
     // added (causing a fail), it is possible that some of the iPartners sent
     // have already been evaluated. However, test showed that filtering the
-    // list takes more than processing it as is.
+    // list takes more time than processing it as is.
     // val filteredPartners = iPartners.filter{ iPartner => 
-    //   val (smaller, larger) = 
-    //     if (iFixedFeat < iPartner) (iFixedFeat, iPartner) else (iPartner, iFixedFeat)
-      
-    //   !corrs.contains(smaller, larger) 
+    //   !corrs.contains(iPartner, iFixedFeat) 
     // }
 
     if(!iPartners.isEmpty){
-    // if(!filteredPartners.isEmpty){
 
       // The hard work line!
       val newCorrs: Seq[Double] = correlator.correlate(iFixedFeat, iPartners)
@@ -31,6 +27,11 @@ class CorrelationsMatrix(correlator: Correlator) {
       iPartners.zip(newCorrs).foreach{ case (iPartner, corr) => 
         this(iPartner, iFixedFeat) = corr
       }
+
+      // DEBUG print corrs with class
+      // println("CORRS WITH CLASS=")
+      // println(newCorrs.mkString(","))
+      // System.exit(0)
     }
   }
 
@@ -56,4 +57,5 @@ class CorrelationsMatrix(correlator: Correlator) {
     this.corrs.keys.toSeq.sorted
       .map{ pair => s"$pair = ${corrs(pair)}" }.mkString("\n")
   }
+
 }

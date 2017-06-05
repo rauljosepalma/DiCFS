@@ -15,9 +15,6 @@ import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.{DoubleType, StructType}
 import org.apache.spark.rdd.RDD
 
-// TODO
-import org.apache.spark.Partitioner
-
 /**
  * Params for [[CFSSelector]] and [[CFSSelectorModel]].
  */
@@ -53,6 +50,24 @@ private[feature] trait CFSSelectorParams extends Params
   /** @group getParam */
   def getSearchTermination: Int = $(searchTermination)
 
+  // TODO UPDATE DESCRIPTION
+  /**
+   * Whether to perfom or not auto sampling, if true auto sampling will
+   * incrementally calculate symmetric uncertainty correlations with class and
+   * select a sample when they stabilize. In large datasets, this sample can be
+   * much smaller than the original data. Experiments show that returned
+   * results are not significantly different with confidence of TODO as if the
+   * whole data had been processed.
+   * The default value for autoSampling is false.
+   *
+   * @group param
+   */
+  final val autoSampling = new BooleanParam(this, "autoSampling",
+    "Whether to perfom or not auto sampling, if true auto sampling will incrementally calculate symmetric uncertainty correlations with class and select a sample when they stabilize. In large datasets, this sample can be much smaller than the original data. Experiments show that returned results are not significantly different with confidence of TODO as if the whole data had been processed.")
+  setDefault(autoSampling -> false)
+
+  /** @group getParam */
+  def getAutoSampling: Boolean = $(autoSampling)
 
 }
 
@@ -70,6 +85,9 @@ final class CFSSelector(override val uid: String)
   def setLocallyPredictive(value: Boolean): this.type = set(locallyPredictive, value)
 
   /** @group setParam */
+  def setAutoSampling(value: Boolean): this.type = set(autoSampling, value)
+
+  /** @group setParam */
   def setFeaturesCol(value: String): this.type = set(featuresCol, value)
 
   /** @group setParam */
@@ -80,6 +98,7 @@ final class CFSSelector(override val uid: String)
 
   override def fit(dataset: Dataset[_]): CFSSelectorModel = {
     val informativeDS = filterNonInformativeFeats(dataset)
+    // val informativeDS = dataset
 
     transformSchema(informativeDS.schema, logging = true)
 
@@ -206,7 +225,7 @@ final class CFSSelector(override val uid: String)
     // feature in the correlations matrix
     val iClass = nFeats
 
-    val correlator = new SUCorrelator(rdd, attrsSizes)
+    val correlator = new SUCorrelator(rdd, attrsSizes, $(autoSampling))
     val corrs = new CorrelationsMatrix(correlator)
     val evaluator = new CfsSubsetEvaluator(corrs, iClass)
     val optimizer = 
@@ -346,18 +365,4 @@ object CFSSelectorModel extends MLReadable[CFSSelectorModel] {
   override def read: MLReader[CFSSelectorModel] = new CFSSelectorModelReader
 
   override def load(path: String): CFSSelectorModel = super.load(path)
-}
-
-class ExactPartitioner(
-  partitions: Int,
-  elements: Long
-)
-    extends Partitioner {
-
-  override def numPartitions: Int = partitions
-
-  override def getPartition(key: Any): Int = {
-    val k = key.asInstanceOf[Long]
-    return (k * partitions / elements).toInt
-  }
 }

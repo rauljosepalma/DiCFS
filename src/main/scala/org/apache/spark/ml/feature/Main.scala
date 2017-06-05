@@ -53,6 +53,7 @@ object Main {
       .setOutputCol("prediction")
       .setLocallyPredictive(args(2).stripPrefix("locallyPred=").toBoolean)
       .setSearchTermination(args(3).stripPrefix("searchTermination=").toInt)
+      .setAutoSampling(args(4).stripPrefix("autoSampling=").toBoolean)
     }
 
     val model = 

@@ -19,7 +19,6 @@ class CfsSubsetEvaluator(corrs: CorrelationsMatrix, iClass: Int)
 
   var numOfEvaluations = 0
 
-  // States are merged from different searches
   override def preEvaluate(states: Seq[EvaluableState]): Unit = {
     // TODO Run-time check was the only solution found
     preEvaluateFS(states.map{ 
