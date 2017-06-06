@@ -242,8 +242,12 @@ final class CFSSelector(override val uid: String)
     // Add locally predictive feats if requested
     if (!$(locallyPredictive))
       subset
-    else 
-      addLocallyPredictiveFeats(subset, corrs, iClass)
+    else {
+      val newSubset = addLocallyPredictiveFeats(subset, corrs, iClass)
+      // DEBUG
+      println(s"UPDATED NUM OF EVALUATED PAIRS=${correlator.totalPairsEvaluated}")  
+      newSubset
+    }
   }
 
 
@@ -269,14 +273,15 @@ final class CFSSelector(override val uid: String)
         // Check if next candidate feat is more correlated to the class than
         // to any of the selected feats
         val candFeat = orderedCandFeats.head
-        val candFeatClassCorr = corrs(candFeat,iClass)
         val tempSubset = 
           extendedSubset
-            .filter { f => (corrs(f,candFeat) > candFeatClassCorr) }
+            .filter { f => (corrs(f,candFeat) > corrs(candFeat,iClass)) }
         // Add feat to the selected set
         if(tempSubset.isEmpty){
           // DEBUG
           println(s"ADDING LOCALLY PREDICTIVE FEAT: $candFeat")
+          // iPartners must be asc sorted!
+          corrs.precalcNonExistentCorrs(candFeat, orderedCandFeats.tail.sorted)
           doAddFeats(
             extendedSubset + candFeat, orderedCandFeats.tail)
         // Ignore feat

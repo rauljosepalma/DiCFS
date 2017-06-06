@@ -50,7 +50,7 @@ class SUCorrelator(
       (origData, corrs, bEntropies)
     }
   
-  // Return correlations in the same order of iPartners
+  // Return correlations considering iPartners is in ascending order
   override def correlate(iFixedFeat: Int, iPartners: Seq[Int]): Seq[Double] = {
 
     require(!iPartners.isEmpty, 

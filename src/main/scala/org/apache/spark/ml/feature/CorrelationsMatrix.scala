@@ -7,14 +7,18 @@ class CorrelationsMatrix(correlator: Correlator) {
 
   private val corrs = mutable.Map.empty[(Int,Int), Double]
 
+  // iPartners collection must be asc sorted
   def precalcCorrs(iFixedFeat: Int, iPartners: Seq[Int]): Unit = {
 
     // In the case a of feature that was evaluated and expanded and then not
     // added (causing a fail), it is possible that some of the iPartners sent
     // have already been evaluated. However, test showed that filtering the
     // list takes more time than processing it as is.
-    // val filteredPartners = iPartners.filter{ iPartner => 
-    //   !corrs.contains(iPartner, iFixedFeat) 
+    // val filteredIPartners = iPartners.filter{ iPartner => 
+    //   val key: (Int, Int) = 
+    //     if (iPartner < iFixedFeat) (iPartner,iFixedFeat) 
+    //     else (iFixedFeat,iPartner)
+    //   !corrs.contains(key) 
     // }
 
     if(!iPartners.isEmpty){
@@ -25,6 +29,41 @@ class CorrelationsMatrix(correlator: Correlator) {
         
       // Update corrs
       iPartners.zip(newCorrs).foreach{ case (iPartner, corr) => 
+        this(iPartner, iFixedFeat) = corr
+      }
+
+      // DEBUG print corrs with class
+      // println("CORRS WITH CLASS=")
+      // println(newCorrs.mkString(","))
+      // System.exit(0)
+    }
+  }
+
+  // iPartners collection must be asc sorted
+  // This method is useful when there is a possibility that all the pairs have
+  // already been evaluated, as when adding predictive feats.
+  def precalcNonExistentCorrs(iFixedFeat: Int, iPartners: Seq[Int]): Unit = {
+
+    // In the case a of feature that was evaluated and expanded and then not
+    // added (causing a fail), it is possible that some of the iPartners sent
+    // have already been evaluated. However, test showed that filtering the
+    // list takes more time than processing it as is.
+    val filteredIPartners = iPartners.filter{ iPartner => 
+      val key: (Int, Int) = 
+        if (iPartner < iFixedFeat) (iPartner,iFixedFeat) 
+        else (iFixedFeat,iPartner)
+      !corrs.contains(key) 
+    }
+
+    if(!filteredIPartners.isEmpty){
+
+      // The hard work line!
+      val newCorrs: Seq[Double] = 
+        correlator.correlate(iFixedFeat, filteredIPartners)
+        // correlator.correlate(iFixedFeat, filteredPartners)
+        
+      // Update corrs
+      filteredIPartners.zip(newCorrs).foreach{ case (iPartner, corr) => 
         this(iPartner, iFixedFeat) = corr
       }
 
