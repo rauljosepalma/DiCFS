@@ -26,6 +26,7 @@ class SUCorrelator(
   val iClass = attrsSizes.size - 1
   // The smallest deviation allowed in double comparisons. (from WEKA)
   private val SMALL: Double = 1e-6
+  private val MEDIUM: Double = 1e-4
 
   // Broadcasted sizes for ctables creation
   // In case of autoSampling == true, the attrsSizes could change, however
@@ -33,13 +34,14 @@ class SUCorrelator(
   private val bCtSizes = origData.context.broadcast(attrsSizes)
 
   // private val nInstances = 30801723L
-  private val batchSize = 0.05D 
+  private val batchSize = (0.05 * origData.count).toLong
 
   private val (data, corrsWithClass, bEntropies): 
     (RDD[Array[Byte]], Seq[Double], Broadcast[IndexedSeq[Double]]) = 
     
     if (autoSampling) {
-      searchSample(Seq(), origData, Double.MaxValue, None)
+      searchSample(origData.zipWithIndex.map(_.swap), 
+        Double.MaxValue, 0L, None)
     } else {
       val ctables: RDD[(Int, ContingencyTable)] = 
         calculateCTables(iClass, Range(0, iClass), origData)
@@ -77,17 +79,21 @@ class SUCorrelator(
   }
 
   private def searchSample(
-    sampledBatches: Seq[RDD[Array[Byte]]],
-    remainingData: RDD[Array[Byte]], 
+    indexedData: RDD[(Long, Array[Byte])], 
     prevCorrsSum: Double,
-    // prevSampleSize: Double,
+    prevSampleSize: Long,
     // An array is broadcasted to simplify serialization
     bPrevCTables: Option[Broadcast[Array[ContingencyTable]]])
     : (RDD[Array[Byte]], Seq[Double], Broadcast[IndexedSeq[Double]]) = {
 
-    val splittedData = 
-      remainingData.randomSplit(Array(batchSize, 1.0 - batchSize))
-    val (newBatch, newRemainingData) = (splittedData(0), splittedData(1))
+    // val splittedData = 
+    //   remainingData.randomSplit(Array(batchSize, 1.0 - batchSize))
+    // val (newBatch, newRemainingData) = (splittedData(0), splittedData(1))
+    val newBatch: RDD[Array[Byte]] = 
+      indexedData
+        .filterByRange(prevSampleSize, prevSampleSize + batchSize)
+        .map(_._2)
+
     // Hard work!
     val newCTables: RDD[(Int, ContingencyTable)] = 
       if(bPrevCTables.nonEmpty)
@@ -98,24 +104,29 @@ class SUCorrelator(
         calculateCTables(iClass, Range(0, iClass), newBatch)
 
     val entropies = calculateEntropies(newCTables)
-    val bEntropies = remainingData.context.broadcast(entropies)
+    val bEntropies = indexedData.context.broadcast(entropies)
     val corrs = doCorrelate(iClass, Range(0, iClass), newCTables, bEntropies)
     // val newSampleSize = (1.0 - batchSize) * prevSampleSize + batchSize*nInstances
 
     bPrevCTables.foreach(_.unpersist())
 
-    if (corrs.sum < prevCorrsSum) {
+    // if (corrs.sum < prevCorrsSum) {
+    if (!approxEq(corrs.sum, prevCorrsSum, threshold=MEDIUM)) {
       val newCTablesArray: Array[ContingencyTable] = 
         newCTables.collectAsMap.toMap.toArray.sortBy(_._1).map(_._2)
-      val bNewCTables = remainingData.context.broadcast(newCTablesArray)
+      val bNewCTables = indexedData.context.broadcast(newCTablesArray)
       bEntropies.unpersist()
       
-      searchSample(sampledBatches :+ newBatch, 
-        newRemainingData, corrs.sum, Option(bNewCTables))
+      searchSample(
+        indexedData, corrs.sum, 
+        prevSampleSize + batchSize, Option(bNewCTables))
     } else {
       // newSampleSize
       // return the union all sample RDDs and corrs to prevent recalculation
-      ((sampledBatches :+ newBatch).reduce(_ ++ _), corrs, bEntropies)
+      // ((sampledBatches :+ newBatch).reduce(_ ++ _), corrs, bEntropies)
+      (indexedData.filterByRange(0, prevSampleSize + batchSize).map(_._2),
+        corrs,
+        bEntropies)
     } 
   }
 
@@ -173,7 +184,7 @@ class SUCorrelator(
       // This condition was taken from WEKA source code     
       // If two classes have approximately zero correlation but neither of them
       // is the class, then their SymmetricUncertainty is considered to be 1.0
-      if(approxEq(correlation,0.0))
+      if(approxEq(correlation,0.0, threshold=SMALL))
         // if(iPartner == iClass || iFixedFeat == iClass) 0.0 else 1.0
         if(iPartner == iClass || iFixedFeat == iClass) (iPartner, 0.0) else (iPartner, 1.0)
       else
@@ -183,8 +194,8 @@ class SUCorrelator(
     // }.collect.sortBy(_._1).map(_._2)
   }
 
-  private def approxEq(a: Double, b: Double): Boolean = {
-    ((a == b) || ((a - b < SMALL) && (b - a < SMALL)))
+  private def approxEq(a: Double, b: Double, threshold: Double): Boolean = {
+    ((a == b) || ((a - b < threshold) && (b - a < threshold)))
   }
 
   // TODO DELETE?
