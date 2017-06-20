@@ -4,7 +4,7 @@ version := "0.1.0-SNAPSHOT"
 
 scalaVersion := "2.11.8"
 
-scalacOptions := Seq("-unchecked", "-deprecation")
+scalacOptions := Seq("-unchecked", "-deprecation", "-feature")
 
 val sparkVersion = "2.1.0"
 

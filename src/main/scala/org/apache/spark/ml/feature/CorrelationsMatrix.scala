@@ -39,15 +39,13 @@ class CorrelationsMatrix(correlator: Correlator) {
     }
   }
 
+  // TODO test if filtering helps here or using precalcCorrs is better
+
   // iPartners collection must be asc sorted
   // This method is useful when there is a possibility that all the pairs have
   // already been evaluated, as when adding predictive feats.
   def precalcNonExistentCorrs(iFixedFeat: Int, iPartners: Seq[Int]): Unit = {
 
-    // In the case a of feature that was evaluated and expanded and then not
-    // added (causing a fail), it is possible that some of the iPartners sent
-    // have already been evaluated. However, test showed that filtering the
-    // list takes more time than processing it as is.
     val filteredIPartners = iPartners.filter{ iPartner => 
       val key: (Int, Int) = 
         if (iPartner < iFixedFeat) (iPartner,iFixedFeat) 

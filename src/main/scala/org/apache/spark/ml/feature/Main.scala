@@ -53,7 +53,8 @@ object Main {
       .setOutputCol("prediction")
       .setLocallyPredictive(args(2).stripPrefix("locallyPred=").toBoolean)
       .setSearchTermination(args(3).stripPrefix("searchTermination=").toInt)
-      .setAutoSampling(args(4).stripPrefix("autoSampling=").toBoolean)
+      .setVerticalPartitioning(args(4).stripPrefix("verticalPartitioning=").toBoolean)
+      .setNPartitions(args(5).stripPrefix("nPartitions=").toInt)
     }
 
     val model = 

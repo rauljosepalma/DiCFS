@@ -9,7 +9,6 @@ import org.apache.spark.ml.linalg.{Vector, VectorUDT,Vectors}
 import org.apache.spark.ml.param._
 import org.apache.spark.ml.param.shared._
 import org.apache.spark.ml.util._
-import org.apache.spark.storage.StorageLevel
 import org.apache.spark.sql._
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.{DoubleType, StructType}
@@ -50,25 +49,36 @@ private[feature] trait CFSSelectorParams extends Params
   /** @group getParam */
   def getSearchTermination: Int = $(searchTermination)
 
-  // TODO UPDATE DESCRIPTION
   /**
-   * Whether to perfom or not auto sampling, if true auto sampling will
-   * incrementally calculate symmetric uncertainty correlations with class and
-   * select a sample when they stabilize. In large datasets, this sample can be
-   * much smaller than the original data. Experiments show that returned
-   * results are not significantly different with confidence of TODO as if the
-   * whole data had been processed.
-   * The default value for autoSampling is false.
+   * Whether to use a vertical partitioning scheme to process the data.
+   * Experiments show that for larger datasets setting this parameter to true
+   * its a good idea. 
+   * The default value for verticalPartitioning is true.
    *
    * @group param
    */
-  final val autoSampling = new BooleanParam(this, "autoSampling",
-    "Whether to perfom or not auto sampling, if true auto sampling will incrementally calculate symmetric uncertainty correlations with class and select a sample when they stabilize. In large datasets, this sample can be much smaller than the original data. Experiments show that returned results are not significantly different with confidence of TODO as if the whole data had been processed.")
-  setDefault(autoSampling -> false)
+  final val verticalPartitioning = new BooleanParam(this, "verticalPartitioning",
+    "Whether to use a vertical partitioning scheme to process the data. Experiments show that for larger datasets setting this parameter to true its a good idea.")
+  setDefault(verticalPartitioning -> true)
 
   /** @group getParam */
-  def getAutoSampling: Boolean = $(autoSampling)
+  def getVerticalPartitioning: Boolean = $(verticalPartitioning)
 
+  /**
+   * If vertical partitioning is enabled, this indicates the number of
+   * partitions to use after the data is transformed to a columnar format.
+   * The default value is 0, which means that the default
+   * level of parallelism is used.
+   *
+   * @group param
+   */
+  final val nPartitions = new IntParam(this, "nPartitions",
+    "If vertical partitioning is enabled, this indicates the number of partitions to use after the data is transformed to a columnar format.",
+    ParamValidators.gtEq(0))
+  setDefault(nPartitions -> 0)
+
+  /** @group getParam */
+  def getNPartitions: Int = $(nPartitions)
 }
 
 
@@ -83,9 +93,12 @@ final class CFSSelector(override val uid: String)
 
   /** @group setParam */
   def setLocallyPredictive(value: Boolean): this.type = set(locallyPredictive, value)
+  
+  /** @group setParam */
+  def setVerticalPartitioning(value: Boolean): this.type = set(verticalPartitioning, value)
 
   /** @group setParam */
-  def setAutoSampling(value: Boolean): this.type = set(autoSampling, value)
+  def setNPartitions(value: Int): this.type = set(nPartitions, value)
 
   /** @group setParam */
   def setFeaturesCol(value: String): this.type = set(featuresCol, value)
@@ -97,64 +110,43 @@ final class CFSSelector(override val uid: String)
   def setLabelCol(value: String): this.type = set(labelCol, value)
 
   override def fit(dataset: Dataset[_]): CFSSelectorModel = {
-    val informativeDS = filterNonInformativeFeats(dataset)
-    // val informativeDS = dataset
+    
+    val (informativeDF, initialIndexesMap): (DataFrame, Array[Int]) = 
+      filterNonInformativeFeats(dataset.select(
+        col($(featuresCol)), col($(labelCol))))
 
-    transformSchema(informativeDS.schema, logging = true)
+    transformSchema(informativeDF.schema, logging = true)
 
-    validateMetadata(informativeDS.schema)
+    validateMetadata(informativeDF.schema)
 
-    val informativeAttrs: Array[NominalAttribute] = 
-      AttributeGroup.fromStructField(informativeDS.schema($(featuresCol)))
-        .attributes.get.map(_.asInstanceOf[NominalAttribute])
-    val labelAttr: NominalAttribute = 
-      Attribute.fromStructField(informativeDS.schema($(labelCol)))
-        .asInstanceOf[NominalAttribute]
-    val attrsSizes: IndexedSeq[Int] = informativeAttrs.map(_.values.get.size) :+ labelAttr.values.get.size
+    val informativeDFSelectedFeats: FeaturesSubset = doFit(informativeDF)
 
-    val rdd = dsToByteRDD(informativeDS).persist(StorageLevel.MEMORY_ONLY)
-
-    val selectedFeats: FeaturesSubset = doFit(rdd, attrsSizes)
-
-    rdd.unpersist()
-
-    val selectedFeatsNames: Array[String] = 
-      selectedFeats.map(informativeAttrs(_).name.get).toArray
-
-    val originalAG: AttributeGroup  = 
-      AttributeGroup.fromStructField(dataset.schema($(featuresCol)))
+    val selectedFeats: Array[Int] = 
+      informativeDFSelectedFeats.map(initialIndexesMap).toArray
 
     // DEBUG
     // Show feats indexes based on original dataset
-    println("SELECTED FEATS = " + 
-      selectedFeatsNames.map(originalAG.indexOf).sorted.mkString(","))
+    println("SELECTED FEATS = " + selectedFeats.sorted.mkString(","))
 
-    copyValues(new CFSSelectorModel(uid, selectedFeatsNames).setParent(this)) 
+    copyValues(new CFSSelectorModel(uid, selectedFeats).setParent(this)) 
   }
 
   override def transformSchema(schema: StructType): StructType = {
-
-    val ag = AttributeGroup.fromStructField(schema($(featuresCol)))
-    val nFeats = ag.size
-
     SchemaUtils.checkColumnType(schema, $(featuresCol), new VectorUDT)
     SchemaUtils.checkNumericType(schema, $(labelCol))
     SchemaUtils.appendColumn(schema, $(outputCol), new VectorUDT)
-
   }
 
   override def copy(extra: ParamMap): CFSSelector = defaultCopy(extra)
 
   private def validateMetadata(schema: StructType): Unit = {
     val ag = AttributeGroup.fromStructField(schema($(featuresCol)))
-    val nFeats = ag.size
     val labelAttr = Attribute.fromStructField(schema($(labelCol)))
 
     val allAttrs: Array[Attribute] = 
       ag.attributes.getOrElse(throw new IllegalArgumentException("Dataset  must contain metadata for each feature and label")) :+ labelAttr
     allAttrs.foreach{ attr => 
       require(attr.isNominal, "All features and label must represent nominal attributes in metadata")
-      require(!attr.name.isEmpty, "All features and label must have a name in metadata")
       val nomAttr = attr.asInstanceOf[NominalAttribute]
       // Here we assume that stored values are indexes of real values represented as whole doubles in secuential order in a range included in [0, 255]
       require(!nomAttr.values.isEmpty && nomAttr.values.size <= 255, 
@@ -162,17 +154,9 @@ final class CFSSelector(override val uid: String)
     }
   }
 
-  private def dsToByteRDD(dataset: Dataset[_]): RDD[Array[Byte]] = {
-    // dataset.select(col($(featuresCol)), col($(labelCol)).cast(DoubleType)).rdd
-    dataset.select(col($(featuresCol)), col($(labelCol)))
-      .rdd.map{ row: Row =>
-        row(0).asInstanceOf[Vector].toArray.map(_.toByte) :+ 
-          row(1).asInstanceOf[Double].toByte
-      }
-  }
-
-  private def filterNonInformativeFeats(dataset: Dataset[_]): Dataset[_] = {
-    val ag = AttributeGroup.fromStructField(dataset.schema($(featuresCol)))
+  private def filterNonInformativeFeats(df: DataFrame)
+    : (DataFrame, Array[Int]) = {
+    val ag = AttributeGroup.fromStructField(df.schema($(featuresCol)))
     val attrs: Array[Attribute] = ag.attributes.get
     
     // Non informative feats contain a single value
@@ -199,7 +183,7 @@ final class CFSSelector(override val uid: String)
           informativeFeatsIndexes.map{ case (i: Int) => features(i) }) 
       }
 
-      { dataset
+      (df
         // Filter feats
         .withColumn(
           $(featuresCol),
@@ -207,25 +191,29 @@ final class CFSSelector(override val uid: String)
         // Preserve metadata
         .withColumn(
           $(featuresCol),
-          col($(featuresCol)).as("_", informativeAttrs.toMetadata))
-      }
+          col($(featuresCol)).as("_", informativeAttrs.toMetadata)),
+      informativeFeatsIndexes)
       
     } else {
-      dataset 
+      (df, informativeFeatsIndexes) 
     }
   }
 
-  // attrsSize must contain the number of diferente values of all feats
-  // including the class 
-  private def doFit(rdd: RDD[Array[Byte]], attrsSizes: IndexedSeq[Int])
-    : FeaturesSubset = {
+  private def doFit(df: DataFrame): FeaturesSubset = {
 
-    val nFeats = attrsSizes.size - 1
+    val nFeats = 
+      AttributeGroup.fromStructField(df.schema($(featuresCol)))
+        .attributes.get.size
     // By convention it is considered that class is stored after the last
     // feature in the correlations matrix
     val iClass = nFeats
 
-    val correlator = new SUCorrelator(rdd, attrsSizes, $(autoSampling))
+    val correlator = 
+      if ($(verticalPartitioning))
+        new SUCorrelatorVP(df, $(nPartitions))
+      else
+        new SUCorrelatorHP(df)
+
     val corrs = new CorrelationsMatrix(correlator)
     val evaluator = new CfsSubsetEvaluator(corrs, iClass)
     val optimizer = 
@@ -235,6 +223,8 @@ final class CFSSelector(override val uid: String)
       )
     val result = optimizer.search
     val subset = result.state.asInstanceOf[FeaturesSubset]
+
+    correlator.unpersistData
     
     // DEBUG
     println(s"BEST MERIT= ${result.merit}")
@@ -249,7 +239,6 @@ final class CFSSelector(override val uid: String)
       newSubset
     }
   }
-
 
   private def addLocallyPredictiveFeats(
     selectedSubset: FeaturesSubset, 
@@ -302,7 +291,7 @@ object CFSSelector extends DefaultParamsReadable[CFSSelector] {
 
 final class CFSSelectorModel private[ml] (
   override val uid: String,
-  val selectedFeatsNames: Array[String])
+  val selectedFeats: Array[Int])
   extends Model[CFSSelectorModel] with CFSSelectorParams with MLWritable {
 
   import CFSSelectorModel._
@@ -317,7 +306,7 @@ final class CFSSelectorModel private[ml] (
     val slicer = { new VectorSlicer()
       .setInputCol($(featuresCol))
       .setOutputCol($(outputCol))
-      .setNames(selectedFeatsNames)
+      .setIndices(selectedFeats)
     }
 
     slicer.transform(dataset)
@@ -330,7 +319,7 @@ final class CFSSelectorModel private[ml] (
   override def transformSchema(schema: StructType): StructType = ???
 
   override def copy(extra: ParamMap): CFSSelectorModel = {
-    val copied = new CFSSelectorModel(uid, selectedFeatsNames)
+    val copied = new CFSSelectorModel(uid, selectedFeats)
     copyValues(copied, extra).setParent(parent)
   }
 
@@ -342,11 +331,11 @@ object CFSSelectorModel extends MLReadable[CFSSelectorModel] {
   private[CFSSelectorModel]
   class CFSSelectorModelWriter(instance: CFSSelectorModel) extends MLWriter {
 
-    private case class Data(selectedFeatsNames: Seq[String])
+    private case class Data(selectedFeats: Seq[Int])
 
     override protected def saveImpl(path: String): Unit = {
       DefaultParamsWriter.saveMetadata(instance, path, sc)
-      val data = Data(instance.selectedFeatsNames.toSeq)
+      val data = Data(instance.selectedFeats.toSeq)
       val dataPath = new Path(path, "data").toString
       sparkSession.createDataFrame(Seq(data)).repartition(1).write.parquet(dataPath)
     }
@@ -359,9 +348,9 @@ object CFSSelectorModel extends MLReadable[CFSSelectorModel] {
     override def load(path: String): CFSSelectorModel = {
       val metadata = DefaultParamsReader.loadMetadata(path, sc, className)
       val dataPath = new Path(path, "data").toString
-      val data = sparkSession.read.parquet(dataPath).select("selectedFeatsNames").head()
-      val selectedFeatsNames = data.getAs[Seq[String]](0).toArray
-      val model = new CFSSelectorModel(metadata.uid, selectedFeatsNames)
+      val data = sparkSession.read.parquet(dataPath).select("selectedFeats").head()
+      val selectedFeats = data.getAs[Seq[Int]](0).toArray
+      val model = new CFSSelectorModel(metadata.uid, selectedFeats)
       DefaultParamsReader.getAndSetParams(model, metadata)
       model
     }
