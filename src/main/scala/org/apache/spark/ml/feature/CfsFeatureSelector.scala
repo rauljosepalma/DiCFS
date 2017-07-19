@@ -67,8 +67,8 @@ private[feature] trait CFSSelectorParams extends Params
   /**
    * If vertical partitioning is enabled, this indicates the number of
    * partitions to use after the data is transformed to a columnar format.
-   * The default value is 0, which means that the default
-   * level of parallelism is used.
+   * The default value is 0, which means that the number of partitions will be 
+   * equal to the number of features in the dataset.
    *
    * @group param
    */

@@ -13,12 +13,6 @@ val sparkVersion = "2.1.0"
 // http://stackoverflow.com/questions/36080519/spark-shell-dependencies-translate-from-sbt
 libraryDependencies ++= Seq(
   "rauljosepalma" %% "spark-mltools" % "0.1.0-SNAPSHOT",
-  "org.apache.spark" %% "spark-core" % sparkVersion % "provided",
-  "org.apache.spark" %% "spark-mllib" % sparkVersion % "provided")
+  "org.apache.spark" %% "spark-core" % sparkVersion,
+  "org.apache.spark" %% "spark-mllib" % sparkVersion)
   // "sramirez" % "spark-MDLP-discretization" % "1.2.1")
-
-
-// This was done according to the book "sbt in Action" to build a fat jar
-// with the assembly task. A pluging was also added to plugins.sbt
-import AssemblyKeys._
-assemblySettings
