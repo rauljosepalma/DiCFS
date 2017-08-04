@@ -5,13 +5,13 @@ import org.apache.hadoop.fs.Path
 import org.apache.spark.annotation.Since
 import org.apache.spark.ml._
 import org.apache.spark.ml.attribute._
-import org.apache.spark.ml.linalg.{Vector, VectorUDT,Vectors}
+import org.apache.spark.mllib.linalg.{Vector, VectorUDT, Vectors}
 import org.apache.spark.ml.param._
 import org.apache.spark.ml.param.shared._
 import org.apache.spark.ml.util._
 import org.apache.spark.sql._
 import org.apache.spark.sql.functions._
-import org.apache.spark.sql.types.{DoubleType, StructType}
+import org.apache.spark.sql.types.{DoubleType, StructType, NumericType, DataType, StructField}
 import org.apache.spark.rdd.RDD
 
 /**
@@ -105,19 +105,16 @@ final class CFSSelector(override val uid: String)
 
   /** @group setParam */
   def setOutputCol(value: String): this.type = set(outputCol, value)
-
+ 
   /** @group setParam */
   def setLabelCol(value: String): this.type = set(labelCol, value)
 
-  override def fit(dataset: Dataset[_]): CFSSelectorModel = {
+  override def fit(data: DataFrame): CFSSelectorModel = {
+    transformSchema(data.schema, logging = true)
+    validateMetadata(data.schema)
     
     val (informativeDF, initialIndexesMap): (DataFrame, Array[Int]) = 
-      filterNonInformativeFeats(dataset.select(
-        col($(featuresCol)), col($(labelCol))))
-
-    transformSchema(informativeDF.schema, logging = true)
-
-    validateMetadata(informativeDF.schema)
+      filterNonInformativeFeats(data)
 
     val informativeDFSelectedFeats: FeaturesSubset = doFit(informativeDF)
 
@@ -125,16 +122,39 @@ final class CFSSelector(override val uid: String)
       informativeDFSelectedFeats.map(initialIndexesMap).toArray
 
     // DEBUG
-    // Show feats indexes based on original dataset
+    // Show feats indexes based on original data
     println("SELECTED FEATS = " + selectedFeats.sorted.mkString(","))
 
     copyValues(new CFSSelectorModel(uid, selectedFeats).setParent(this)) 
   }
 
   override def transformSchema(schema: StructType): StructType = {
+
+    // Imported methods from spark version 2.2.0
+    def checkNumericType(
+        schema: StructType,
+        colName: String,
+        msg: String = ""): Unit = {
+      val actualDataType = schema(colName).dataType
+      val message = if (msg != null && msg.trim.length > 0) " " + msg else ""
+      require(actualDataType.isInstanceOf[NumericType], s"Column $colName must be of type " +
+        s"NumericType but was actually of type $actualDataType.$message")
+    }
+    def appendColumn(
+        schema: StructType,
+        colName: String,
+        dataType: DataType): StructType = {
+      if (colName.isEmpty) return schema
+      appendField(schema, StructField(colName, dataType, nullable=false))
+    }
+    def appendField(schema: StructType, col: StructField): StructType = {
+      require(!schema.fieldNames.contains(col.name), s"Column ${col.name} already exists.")
+      StructType(schema.fields :+ col)
+    }
+      
     SchemaUtils.checkColumnType(schema, $(featuresCol), new VectorUDT)
-    SchemaUtils.checkNumericType(schema, $(labelCol))
-    SchemaUtils.appendColumn(schema, $(outputCol), new VectorUDT)
+    checkNumericType(schema, $(labelCol))
+    appendColumn(schema, $(outputCol), new VectorUDT)
   }
 
   override def copy(extra: ParamMap): CFSSelector = defaultCopy(extra)
@@ -302,14 +322,14 @@ final class CFSSelectorModel private[ml] (
   /** @group setParam */
   def setOutputCol(value: String): this.type = set(outputCol, value)
 
-  override def transform(dataset: Dataset[_]): DataFrame = {
+  override def transform(data: DataFrame): DataFrame = {
     val slicer = { new VectorSlicer()
       .setInputCol($(featuresCol))
       .setOutputCol($(outputCol))
       .setIndices(selectedFeats)
     }
 
-    slicer.transform(dataset)
+    slicer.transform(data)
   }
 
   /**
@@ -337,7 +357,7 @@ object CFSSelectorModel extends MLReadable[CFSSelectorModel] {
       DefaultParamsWriter.saveMetadata(instance, path, sc)
       val data = Data(instance.selectedFeats.toSeq)
       val dataPath = new Path(path, "data").toString
-      sparkSession.createDataFrame(Seq(data)).repartition(1).write.parquet(dataPath)
+      sqlContext.createDataFrame(Seq(data)).repartition(1).write.parquet(dataPath)
     }
   }
 
@@ -348,7 +368,7 @@ object CFSSelectorModel extends MLReadable[CFSSelectorModel] {
     override def load(path: String): CFSSelectorModel = {
       val metadata = DefaultParamsReader.loadMetadata(path, sc, className)
       val dataPath = new Path(path, "data").toString
-      val data = sparkSession.read.parquet(dataPath).select("selectedFeats").head()
+      val data = sqlContext.read.parquet(dataPath).select("selectedFeats").head()
       val selectedFeats = data.getAs[Seq[Int]](0).toArray
       val model = new CFSSelectorModel(metadata.uid, selectedFeats)
       DefaultParamsReader.getAndSetParams(model, metadata)

@@ -1,6 +1,6 @@
 package org.apache.spark.ml.feature
 
-import org.apache.spark.ml.linalg.Vector
+import org.apache.spark.mllib.linalg.Vector
 import org.apache.spark.sql.Row
 import org.apache.spark.rdd.RDD
 
@@ -16,7 +16,7 @@ class ContingencyTable(val matrix: DenseMatrix[Double]) extends Serializable {
     new ContingencyTable(this.matrix + that.matrix)
 
   def colsEntropy: Double = {
-    val colsFrequencies: DenseVector[Double] = sum(matrix(::, *)).t
+    val colsFrequencies: DenseVector[Double] = sum(matrix(::, *)).toDenseVector
     // n should be equal to nInstances in case of no missing values
     val n = sum(colsFrequencies)
     // Change zeros per ones to prevent NaN (log(1.0) == 0.0) 
