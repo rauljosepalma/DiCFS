@@ -14,6 +14,8 @@ import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.{DoubleType, StructType, NumericType, DataType, StructField}
 import org.apache.spark.rdd.RDD
 
+import scala.util.{Try, Success, Failure}
+
 /**
  * Params for [[CFSSelector]] and [[CFSSelectorModel]].
  */
@@ -159,18 +161,29 @@ final class CFSSelector(override val uid: String)
 
   override def copy(extra: ParamMap): CFSSelector = defaultCopy(extra)
 
+  // Returns the number of values of either a nominal or binary attribute
+  // checking types of the attribute
+  private def getNumValues(attr: Attribute): Int = {
+    Try(attr.asInstanceOf[NominalAttribute]) match {
+      case Success(nomAttr) =>
+        nomAttr.getNumValues.getOrElse(throw new IllegalArgumentException("Attribute must have values defined in metadata"))
+      case Failure(_) =>
+        Try(attr.asInstanceOf[BinaryAttribute]).getOrElse(throw new IllegalArgumentException("Attribute type not supported. All features and label must represent nominal or binary attributes in metadata"))
+        2
+    }
+  }
+
   private def validateMetadata(schema: StructType): Unit = {
     val ag = AttributeGroup.fromStructField(schema($(featuresCol)))
     val labelAttr = Attribute.fromStructField(schema($(labelCol)))
 
     val allAttrs: Array[Attribute] = 
       ag.attributes.getOrElse(throw new IllegalArgumentException("Dataset  must contain metadata for each feature and label")) :+ labelAttr
+
     allAttrs.foreach{ attr => 
-      require(attr.isNominal, "All features and label must represent nominal attributes in metadata")
-      val nomAttr = attr.asInstanceOf[NominalAttribute]
-      // Here we assume that stored values are indexes of real values represented as whole doubles in secuential order in a range included in [0, 255]
-      require(!nomAttr.values.isEmpty && nomAttr.values.size <= 255, 
-       "All features and label must have a maximum of 255 different values in metadata")
+      val numValues = getNumValues(attr)
+      require(numValues > 0 && numValues <= 255, 
+        "All features and label must have metadata values in range ]0,255]")
     }
   }
 
@@ -182,9 +195,7 @@ final class CFSSelector(override val uid: String)
     // Non informative feats contain a single value
     val informativeFeatsIndexes: Array[Int] = { attrs
       .zipWithIndex
-      .filter{ case (attr, _) =>
-        attr.asInstanceOf[NominalAttribute].getNumValues.get > 1
-      }
+      .filter{ case (attr, _) => getNumValues(attr) > 1 }
       .map{ case (_, index) => index }
     }
 
@@ -248,7 +259,9 @@ final class CFSSelector(override val uid: String)
     
     // DEBUG
     println(s"BEST MERIT= ${result.merit}")
-    println(s"TOTAL NUM OF EVALUATED PAIRS=${correlator.totalPairsEvaluated}")  
+    println(s"TOTAL NUM OF EVALUATED PAIRS=${correlator.totalPairsEvaluated}") 
+    println(s"TOTAL NUM OF PASSES=${evaluator.numOfPasses}")  
+    
     // Add locally predictive feats if requested
     if (!$(locallyPredictive))
       subset
@@ -256,6 +269,7 @@ final class CFSSelector(override val uid: String)
       val newSubset = addLocallyPredictiveFeats(subset, corrs, iClass)
       // DEBUG
       println(s"UPDATED NUM OF EVALUATED PAIRS=${correlator.totalPairsEvaluated}")  
+      println(s"UPDATED NUM OF PASSES=${evaluator.numOfPasses}")  
       newSubset
     }
   }

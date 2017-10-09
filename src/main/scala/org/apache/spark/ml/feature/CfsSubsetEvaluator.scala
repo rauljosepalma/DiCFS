@@ -18,6 +18,7 @@ class CfsSubsetEvaluator(corrs: CorrelationsMatrix, iClass: Int)
   // var cache: WeakHashMap[BitSet, Double] = WeakHashMap[BitSet,Double]()
 
   var numOfEvaluations = 0
+  var numOfPasses = 0
 
   override def preEvaluate(states: Seq[EvaluableState]): Unit = {
     // TODO Run-time check was the only solution found
@@ -53,6 +54,7 @@ class CfsSubsetEvaluator(corrs: CorrelationsMatrix, iClass: Int)
 
     // The hard work!
     corrs.precalcCorrs(iFeat, partners)
+    if (!partners.isEmpty) { numOfPasses += 1 }
       
   }
 

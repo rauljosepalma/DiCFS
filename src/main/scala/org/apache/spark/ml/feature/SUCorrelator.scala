@@ -11,6 +11,8 @@ import org.apache.spark.storage.StorageLevel
 
 import breeze.linalg.DenseMatrix
 
+import scala.util.Try
+
 // sameFeature represents default value for two indentical features
 abstract class Correlator extends Serializable {
   def correlate(iFixedFeat: Int, iPartners: Seq[Int]): Seq[Double]
@@ -24,14 +26,11 @@ abstract class SUCorrelator(df: DataFrame) extends Correlator {
 
   // The amount of different values each feat has (including the class)
   protected val featsSizes: IndexedSeq[Int] = {
-    val featuresAttrs: Array[NominalAttribute] = 
-      AttributeGroup.fromStructField(df.schema(0))
-        .attributes.get.map(_.asInstanceOf[NominalAttribute])
-    val labelAttr: NominalAttribute = 
-      Attribute.fromStructField(df.schema(1))
-        .asInstanceOf[NominalAttribute]
+    val featuresAttrs: Array[Attribute] = 
+      AttributeGroup.fromStructField(df.schema(0)).attributes.get
+    val labelAttr: Attribute = Attribute.fromStructField(df.schema(1))
 
-    featuresAttrs.map(_.values.get.size) :+ labelAttr.values.get.size
+    featuresAttrs.map(getNumValues) :+ getNumValues(labelAttr)
   }
   // Broadcasted sizes for ctables creation
   // In case of autoSampling == true, the featsSizes could change, however
@@ -138,6 +137,10 @@ abstract class SUCorrelator(df: DataFrame) extends Correlator {
   protected def approxEq(a: Double, b: Double, threshold: Double): Boolean = {
     ((a == b) || ((a - b < threshold) && (b - a < threshold)))
   }
+
+  // If attribute is not nominal it is assumed to be binary
+  protected def getNumValues(attr: Attribute): Int = 
+    Try(attr.asInstanceOf[NominalAttribute]).map(_.getNumValues.get).getOrElse(2)
 }
 
 class SUCorrelatorHP(df: DataFrame) extends SUCorrelator(df) {
