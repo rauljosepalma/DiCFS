@@ -44,8 +44,17 @@ abstract class SUCorrelator(df: DataFrame) extends Correlator {
   protected val SMALL: Double = 1e-6
 
   protected type DataFormat
-  protected val data: RDD[DataFormat] = 
-    prepareData.persist(StorageLevel.MEMORY_ONLY)
+  protected val data: RDD[DataFormat] = {
+    // DEBUG
+    val t0 = System.currentTimeMillis()
+
+    val r = prepareData.persist(StorageLevel.MEMORY_ONLY)
+
+    val t1 = System.currentTimeMillis()
+    println("DATA PREPARATION TIME: " + (t1 - t0) + "ms")
+
+    r
+  }
 
   protected val (corrsWithClass, bEntropies): 
     (Seq[Double], Broadcast[IndexedSeq[Double]]) = {
@@ -130,7 +139,8 @@ abstract class SUCorrelator(df: DataFrame) extends Correlator {
       else
         // correlation
         (iPartner, correlation)
-    }.sortByKey().values.collect
+    // }.sortByKey().values.collect
+    }.collectAsMap.toSeq.sortBy(_._1).map(_._2)
   }
 
 
