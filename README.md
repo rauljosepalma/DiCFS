@@ -1,5 +1,5 @@
-
-An Apache Spark based distributed implementation of the classical CFS algorithm.
+An Apache Spark based distributed implementation of the classical CFS algorithm. Current implementation uses Spark 2.1.0 and the DataFrame-based API.
+A branch with support for Spark 1.6.1 is also available, however it also uses the DataFrame-based API.
 
 ## Original CFS
 
@@ -14,3 +14,23 @@ This repository is associated to a paper already submitted for publication.
 ## References
 
 [1] Hall, M. A. (2000). Correlation-based Feature Selection for Discrete and Numeric Class Machine Learning, 359–366.
+
+## Example of Use
+
+```scala
+import org.apache.spark.ml.feature.CFSSelector
+...
+
+val fSelector = { new CFSSelector()
+  .setFeaturesCol("features")
+  .setLabelCol("label")
+  .setOutputCol("prediction")
+  .setLocallyPredictive(true)
+  .setSearchTermination(5)
+  .setVerticalPartitioning(true))
+  .setNPartitions(0)
+}
+
+val model = fSelector.fit(df)
+val selectedFeats: Array[Int] = model.selectedFeats
+```
