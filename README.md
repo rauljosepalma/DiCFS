@@ -26,7 +26,7 @@ val df = //Read a DataFrame
 val fSelector = { new CFSSelector()
   .setFeaturesCol("features")
   .setLabelCol("label")
-  .setOutputCol("prediction")
+  .setOutputCol("prediction")   // This column will only contain selected feats
   .setLocallyPredictive(true)
   .setSearchTermination(5)
   .setVerticalPartitioning(true))
