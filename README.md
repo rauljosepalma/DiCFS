@@ -21,6 +21,8 @@ This repository is associated to a paper already submitted for publication.
 import org.apache.spark.ml.feature.CFSSelector
 ...
 
+val df = //Read a DataFrame
+
 val fSelector = { new CFSSelector()
   .setFeaturesCol("features")
   .setLabelCol("label")
