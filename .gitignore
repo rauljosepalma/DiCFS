@@ -16,13 +16,10 @@ project/plugins/project/
 .scala_dependencies
 .worksheet
 
-# ENSIME specific
-.ensime_cache/
-.ensime
-
 # Sublime Text
 *.sublime-project
 *.sublime-workspace
 
 # Project specific
 src/scripts/*
+design-resources/*
