@@ -1,12 +1,12 @@
 name := "spark-cfs"
 
-version := "0.1.0-SNAPSHOT"
+version := "0.1.0_spark_2.2.1-SNAPSHOT"
 
 scalaVersion := "2.11.8"
 
 scalacOptions := Seq("-unchecked", "-deprecation", "-feature")
 
-val sparkVersion = "2.1.0"
+val sparkVersion = "2.2.1"
 
 // Observe that for sramirez package %% is not used to prevent sbt adding
 // the scalaVersion after the artifactId. As mentioned in:
@@ -20,5 +20,5 @@ libraryDependencies ++= Seq(
 
 // This was done according to the book "sbt in Action" to build a fat jar
 // with the assembly task. A pluging was also added to plugins.sbt
-import AssemblyKeys._
-assemblySettings
+// import AssemblyKeys._
+// assemblySettings
