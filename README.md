@@ -1,4 +1,4 @@
-An Apache Spark based distributed implementation of the classical CFS algorithm. Current implementation uses Spark 2.1.0 and the DataFrame-based API.
+An Apache Spark based distributed implementation of the classical CFS algorithm. Current implementation uses Spark 2.2.1 and the DataFrame-based API.
 A branch with support for Spark 1.6.1 is also available, however it also uses the DataFrame-based API.
 
 ## Original CFS
